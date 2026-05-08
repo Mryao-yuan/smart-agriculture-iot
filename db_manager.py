@@ -27,17 +27,18 @@ def init_db():
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            # 1. 创建报警配置表
+            # 报警规则表
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS alert_config (
+                CREATE TABLE IF NOT EXISTS alert_rules (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    target_gh VARCHAR(100),
-                    max_temp DOUBLE,
-                    min_temp DOUBLE,
-                    sms_enabled TINYINT(1),
-                    phone VARCHAR(20),
-                    wechat_enabled TINYINT(1),
-                    pushplus_token VARCHAR(255)
+                    target_gh VARCHAR(100) NOT NULL,      -- 大棚名称
+                    metric_name VARCHAR(50) NOT NULL,    -- 监控指标(如:空温, 土壤湿度)
+                    min_val DOUBLE,                      -- 下限
+                    max_val DOUBLE,                      -- 上限
+                    ding_webhook VARCHAR(500),           -- 钉钉推送地址
+                    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    # 🌟 关键：设置大棚+指标的联合唯一索引，保证同一个大棚的同一个指标只有一条规则
+                    UNIQUE KEY uk_gh_metric (target_gh, metric_name)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')
             
@@ -117,17 +118,12 @@ def init_db():
     finally:
         conn.close()
 
-def sync_iot_nested_data(json_response):
-    if json_response.get("flag") != "00" or not json_response.get("dataList"):
-        print("未获取到有效数据或数据为空")
-        return
-
-    data_list = json_response.get("dataList", [])
-
+def sync_iot_nested_data(data_list):
     devices_to_upsert = []
     sensors_to_upsert = []
     history_to_insert = []
 
+    alert_snapshot = [] # 报警器提供快照
     for device in data_list:
         device_id = device.get("id")
         # ================= 1. 组装设备 =================
@@ -138,14 +134,11 @@ def sync_iot_nested_data(json_response):
             device.get("isDelete", 0), device.get("isLine", 0), device.get("linktype"),
             device.get("userId"), device.get("userName")
         ))
-
         sensors_list = device.get("sensorsList")
         if not sensors_list:
             continue
-
         for sensor in sensors_list:
             sensor_id = sensor.get("id")
-
             # ================= 2. 组装传感器元数据 =================
             sensors_to_upsert.append((
                 sensor_id, device_id, sensor.get("sensorName"), sensor.get("sensorTypeId"),
@@ -155,12 +148,11 @@ def sync_iot_nested_data(json_response):
                 sensor.get("lng", 0.0), sensor.get("ordernum"), sensor.get("sensorMapping"),
                 sensor.get("userId"), sensor.get("updateDate")
             ))
-            
             # ================= 3. 核心：统一 value =================
             sensor_type = sensor.get("sensorTypeId")
             raw_value = sensor.get("value")
             raw_switch = sensor.get("switcher")
-
+            update_date = sensor.get("updateDate")
             value = None
             try:
                 if sensor_type == 1:
@@ -175,11 +167,16 @@ def sync_iot_nested_data(json_response):
                     value = str(raw_value) if raw_value else ""
             except Exception:
                 value = ""
-
-            update_date = sensor.get("updateDate")
             if update_date and value is not None:
                 history_to_insert.append((sensor_id, value, update_date))
-
+                alert_snapshot.append({
+                        'device_name': device.get("deviceName", "未知大棚"),
+                        'sensor_name': sensor.get("sensorName", ""),
+                        'sensor_type': sensor_type,
+                        'value': value,
+                        'unit': sensor.get("unit", ""),
+                        'data_time': update_date  
+                    })
     # ================= 写 TiDB 数据库 (使用 PyMySQL) =================
     conn = get_connection()
     try:
@@ -215,7 +212,7 @@ def sync_iot_nested_data(json_response):
 
         conn.commit()
         print(f"✅ 时间：{time.strftime('%Y-%m-%d %H:%M:%S')} | 设备:{len(devices_to_upsert)} | 传感器:{len(sensors_to_upsert)} | 历史:{len(history_to_insert)}")
-
+        return alert_snapshot
     except Exception as e:
         print(f"❌ 云数据库写入错误: {e}")
         conn.rollback()

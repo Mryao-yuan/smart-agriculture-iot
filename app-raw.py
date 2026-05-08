@@ -172,12 +172,61 @@ elif menu == "⚙️ 联控与工单":
         batch_no = st.text_input("关联批次号", value="SC-2026-05-07")
         st.date_input("操作日期")
         st.button("保存操作记录")
-        
+    
+       
     st.divider()
-    st.subheader("🚨 阈值报警设置 (需求8)")
+    st.subheader("🚨 自动化预警中心 (钉钉推送)")
+    st.markdown("当传感器数值超过设定范围时，系统将通过钉钉机器人实时向群内发送报警信息。")
+
+    # --- 第一步：引导用户加入报警群 ---
+    with st.expander("📢 第一步：加入大棚预警钉钉群", expanded=True):
+        col_qr1, col_qr2 = st.columns([1, 2])
+        # 这里放置你从钉钉群里保存的机器人二维码图片
+        # 如果没有图片，可以用文字引导
+        col_qr1.image("qrcode.png", caption="扫码加入运维群", width=150) 
+        col_qr2.info("""
+        **操作指引：**
+        1. 手机钉钉扫码进入运维群。
+        2. 群助手已配置机器人,异常数据报警。
+        """)
+
+    # --- 第二步：配置报警规则 ---
+    st.markdown("---")
+    st.markdown("### 第二步：设定阈值与推送地址")
+
     with st.form("alert_form"):
-        max_temp = st.slider("最高温度报警阈值 (°C)", 20, 50, 35)
-        phone = st.text_input("接收报警短信手机号")
-        submit = st.form_submit_button("保存配置")
+        c1, c2 = st.columns(2)
+        target_gh = c1.selectbox("应用大棚", sorted_names)
+        
+        # 动态获取该大棚的指标选项（使用之前定义的 metric_opts）
+        target_metric = c2.selectbox("监控指标基类", base_metric_opts) 
+        
+        col_v1, col_v2 = st.columns(2)
+        max_val = col_v1.number_input("上限报警阈值", value=35.0, step=0.5)
+        min_val = col_v2.number_input("下限报警阈值", value=10.0, step=0.5)
+        
+        # 钉钉 Webhook 地址输入
+        webhook_url = st.text_input(
+            "钉钉 Webhook 地址", 
+            placeholder="https://oapi.dingtalk.com/robot/send?access_token=...",
+            help="在钉钉群助手-添加机器人-自定义-获取此地址"
+        )
+        
+        submit = st.form_submit_button("🚀 部署预警策略", type="primary")
+        
         if submit:
-            st.toast("报警规则已更新")
+            if not webhook_url.startswith("https://oapi.dingtalk.com/"):
+                st.error("❌ 请输入有效的钉钉 Webhook 地址！")
+            else:
+                # --- 写入 TiDB 数据库 ---
+                try:
+                    import database_manager
+                    # 建议数据库增加字段：target_gh, metric_name, max_val, min_val, ding_webhook
+                    success = database_manager.save_alert_rule(
+                        target_gh, target_metric, max_val, min_val, webhook_url
+                    )
+                    if success:
+                        st.balloons()
+                        st.success(f"✅ 策略已生效！系统将每10分钟监控【{target_gh}】的【{target_metric}】。")
+                except Exception as e:
+                    st.error(f"保存失败：{e}")

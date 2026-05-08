@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import time
+import re
 from datetime import datetime, timedelta
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -9,7 +10,8 @@ import plotly.graph_objects as got
 
 from sheduler import device_info_get
 import database_manager 
-from  utils import display_devices_grid,get_weather_amap,init_weather_alert_config,get_weather_alert
+from  utils import display_devices_grid,get_weather_amap,init_weather_alert_config,get_weather_alert,\
+    get_sorted_devices,dingding_webhook_check,user_webhook_check,extract_gh_num
 from datetime import datetime
 from config import *
 # ==================== 1. 基础配置与全局工具 ====================
@@ -195,11 +197,13 @@ if menu == "🌐 设备整体状态":
     st.subheader("🔍 设备传感器详细看板")
     st.caption("选择大棚，查看其挂载的所有实时传感器数据。")
     
+    # TODO 大棚按顺序显示，而不是乱序的设备列表
     device_names = [d['deviceName'] for d in st.session_state.device_data]
-
+    sorted_device_names = sorted(device_names, key=extract_gh_num)
+    
     col_1, col_2 = st.columns(2)
     with col_1:
-        selected_gh = st.selectbox("🏠 选择要查看的大棚", device_names)
+        selected_gh = st.selectbox("🏠 选择要查看的大棚", sorted_device_names)
     with col_2:
         # 数值类型 1 开关类型 2
         selected_type_label = st.selectbox("🔍 选择传感器类型", ["数值","开关"])
@@ -264,11 +268,9 @@ if menu == "🌐 设备整体状态":
                     """, unsafe_allow_html=True)
         else:
             st.warning(f"该设备下没有【{selected_type_label}】类型的传感器。")
-            
-    # 【需求4】跨棚均值对比
-    st.subheader("📊 主页跨棚数据对比 (需求4)")
-    st.caption("选择传感器，从数据库拉取历史数据绘制趋势对比曲线。")
     
+    st.subheader("📊 跨棚数据对比")
+    st.caption("选择传感器，从数据库拉取历史数据绘制趋势对比曲线。")
     valid_metric_names = set()
     for d in st.session_state.device_data:
         sensors_list = d.get('sensorsList') or []
@@ -346,12 +348,10 @@ if menu == "🌐 设备整体状态":
             date_span = (actual_max_date - actual_min_date).days
 
             days_map = {"最近一周": 7, "最近一月": 30}
-            
             if time_range in days_map:
                 theory_start = (now - timedelta(days=days_map[time_range])).date()
                 if actual_min_date > theory_start:
                     st.info(f"💡 数据库最早记录为 **{actual_min_date}**，已为您展示至今趋势。")
-
                 # --- 2. 核心：智能频率判断 ---
                 if date_span < 1:
                     # 💡 逻辑修正：如果实际数据不足 2 天，按“小时”聚合，防止出现“糖葫芦”点图
@@ -365,15 +365,12 @@ if menu == "🌐 设备整体状态":
                     x_col = "日期标签"
                     is_category = True
                     axis_format = "%m-%d"
-
                 final_df_list = []
                 for gh in df_plot["温室名称"].unique():
                     gh_df = df_plot[df_plot["温室名称"] == gh].set_index("采集时间")
                     resampled = gh_df["数值"].resample(sample_rule).mean().reset_index()
-                    
                     if is_category:
                         resampled["日期标签"] = resampled["采集时间"].dt.strftime('%m-%d')
-                    
                     resampled["温室名称"] = gh
                     final_df_list.append(resampled)
                 
@@ -388,12 +385,15 @@ if menu == "🌐 设备整体状态":
 
             # --- 3. 渲染图表 ---
             if not df_curve.empty:
+                
+
+                sorted_gh_names = sorted(df_curve["温室名称"].unique(), key=extract_gh_num)
                 fig_curve = px.line(
                     df_curve, x=x_col, y="数值", color="温室名称",
                     title=f"📈 {time_range} 各棚【{selected_metric}】趋势对比",
-                    markers=True
+                    markers=True,
+                    category_orders={"温室名称": sorted_gh_names}
                 )
-                
                 if is_category:
                     fig_curve.update_xaxes(type='category', categoryorder='category ascending')
                 else:
@@ -407,33 +407,8 @@ if menu == "🌐 设备整体状态":
                 )
                 
                 fig_curve.update_traces(hovertemplate='%{y:.2f}') 
-                st.plotly_chart(fig_curve, use_container_width=True)
+                st.plotly_chart(fig_curve, width='stretch')
 
-            
-            
-        # # 4. 使用 Plotly 渲染趋势曲线图ue
-        # df_curve = pd.DataFrame(line_chart_data)
-        
-        # if not df_curve.empty:
-        #     # 确保时间列为 datetime 格式，防止图表 X 轴错乱
-        #     df_curve["采集时间"] = pd.to_datetime(df_curve["采集时间"])
-            
-        #     fig_curve = px.line(
-        #         df_curve, 
-        #         x="采集时间", 
-        #         y="数值", 
-        #         color="温室名称",
-        #         title=f"{time_range} 各棚 【{ selected_metric}】传感器数据趋势曲线",
-        #         markers=True # 在折线上显示数据点
-        #     )
-        #     fig_curve.update_layout(
-        #         xaxis_title="", 
-        #         yaxis_title="传感器数值",
-        #         hovermode="x unified" # 鼠标悬浮时，出现一条垂直线同时对比所有大棚的值
-        #     )
-        #     st.plotly_chart(fig_curve, width = 'stretch')
-        # else:
-        #     st.warning("数据库中暂无该指标的历史数据，请确保后台同步脚本正在运行。")
 
 # ----------------- 页面二：单棚孪生与控制 -----------------
 elif menu == "🎮 单棚孪生与控制 (管细节)":
@@ -485,7 +460,7 @@ elif menu == "🎮 单棚孪生与控制 (管细节)":
                             st.button("提交记录", key=f"btn_{s.get('id')}")
 
 
-# ----------------- 页面三：多维数据分析 -----------------
+
 # ----------------- 页面三：多维数据分析 -----------------
 elif menu == "📈 多维数据分析 (查根因)":
     st.header("📈 多维数据分析看板")
@@ -502,8 +477,6 @@ elif menu == "📈 多维数据分析 (查根因)":
                 if s.get('sensorTypeId') == 1 and str(s.get("value")) not in ['0', '0.0']:
                     name = s.get("sensorName", "")
                     valid_metrics.add(name)
-                    
-                    # 智能提取基础指标（去掉“1号”、“2组”等前缀）
                     if "号" in name:
                         base_metrics.add(name.split("号")[-1])
                     elif "组" in name:
@@ -513,6 +486,19 @@ elif menu == "📈 多维数据分析 (查根因)":
                         
     metric_opts = sorted(list(valid_metrics))
     base_metric_opts = sorted(list(base_metrics))
+    
+    # 全局时间维度选择（影响 Tab1 和 Tab2）
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📅 分析时间跨度")
+    analysis_range = st.sidebar.selectbox(
+        "选择分析的历史周期", 
+        ["最近24小时", "最近一周", "最近一月"], 
+        index=1
+    )
+    # 计算起始时间
+    now = datetime.now()
+    days_map = {"最近24小时": 1, "最近一周": 7, "最近一月": 30}
+    start_time = now - timedelta(days=days_map[analysis_range])
     
     if not metric_opts:
         st.warning("⚠️ 当前没有任何有效的环境传感器数据可供分析。")
@@ -530,7 +516,7 @@ elif menu == "📈 多维数据分析 (查根因)":
         x_metric = c1.selectbox("横坐标 (X轴) - 例如光照、土壤EC", metric_opts, index=0)
         y_metric = c2.selectbox("纵坐标 (Y轴) - 例如温度、酸碱度", metric_opts, index=1 if len(metric_opts) > 1 else 0)
         if x_metric == y_metric:
-            st.warning("⚠️ 横坐标与纵坐标选择了相同的指标，请选择两个【不同】的参数进行相关性对比。")
+            st.warning("⚠️ 请选择两个【不同】的参数进行相关性对比。")
         else:
             # 只有当两个指标不同时，才去遍历数据和画图
             corr_data = []
@@ -585,37 +571,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                 st.info(f"💡 **系统智能分析诊断**：\n\n经计算，当前【{x_metric}】与【{y_metric}】的相关系数(r)为 **{r_value:.2f}**，{insight}")
             else:
                 st.info(f"暂无法在各棚中同时匹配到有效的【{x_metric}】和【{y_metric}】数据。")
-        # corr_data = []
-        # for d in st.session_state.device_data:
-        #     gh_name = d.get("deviceName", "未知")
-        #     sensors = d.get('sensorsList', [])
-            
-        #     # 精确查找 X 和 Y 对应传感器的值
-        #     x_sensor = next((s for s in sensors if s.get("sensorName") == x_metric), None)
-        #     y_sensor = next((s for s in sensors if s.get("sensorName") == y_metric), None)
-            
-        #     if x_sensor and y_sensor:
-        #         try:
-        #             corr_data.append({
-        #                 "温室": gh_name, 
-        #                 x_metric: float(x_sensor.get("value")), 
-        #                 y_metric: float(y_sensor.get("value"))
-        #             })
-        #         except:
-        #             continue # 容错处理
-                
-        # df_corr = pd.DataFrame(corr_data)
-        # if not df_corr.empty:
-        #     # 绘制散点图并加上 OLS 线性回归趋势线
-        #     fig_scatter = px.scatter(
-        #         df_corr, x=x_metric, y=y_metric, hover_name="温室", 
-        #         trendline="ols", color="温室", size_max=15,
-        #         title=f"各棚【{x_metric}】对【{y_metric}】的相关性影响"
-        #     )
-        #     fig_scatter.update_traces(marker=dict(size=12))
-        #     st.plotly_chart(fig_scatter, width = 'stretch')
-        # else:
-        #     st.info(f"暂无法在各棚中同时匹配到有效的【{x_metric}】和【{y_metric}】数据。")
+
             
     with tab2:
         # ---------------- 【需求3】前中后区域聚合分析 ----------------
@@ -825,23 +781,214 @@ elif menu == "📋 批次工单与联控 (抓生产)":
         fig_batch.update_layout(height=250, margin={"t":30, "b":0})
         st.plotly_chart(fig_batch, width = 'stretch')
         
-
 # ----------------- 页面五：策略与预警 -----------------
 elif menu == "⚙️ 策略与预警 (设规则)":
     st.header("⚙️ 自动化策略与报警配置")
+    st.markdown("### 第一步：选择通知接收方式")
+    push_mode = st.radio(
+        "您希望如何接收报警消息？",
+        ["加入官方公共运维群 (推荐)", "使用我自己的私有钉钉群"],
+        horizontal=True,
+        help="公共群只需扫码即可；私有群需要您自行创建机器人并提供 Webhook 地址。"
+    )
+    final_webhook = ""
+    # 你的硬编码 Webhook (官方群)
+    OFFICIAL_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=887648e45f915aca4617e5958a69171d6f3389cc320fe8253cc36460121ae925"
+    if push_mode == "加入官方公共运维群 (推荐)":
+        _, col_mid, _ = st.columns([1, 4, 1])
+        with col_mid:
+            with st.expander("📢 扫码入群即可接收通知", expanded=True):
+                c_qr, c_info = st.columns([1.2, 2])
+                c_qr.image("qrcode.png", caption="官方运维群二维码", width='stretch')
+                c_info.markdown("<br>", unsafe_allow_html=True)
+                c_info.info("""
+                **使用须知：**
+                1. 扫码进入【平台预警官方群】。
+                2. 系统已内置机器人，无需任何配置。
+                3. 请在下方保存规则，即可开始接收推送。
+                """)
+        final_webhook = OFFICIAL_WEBHOOK
+    else:
+        _, col_mid, _ = st.columns([1, 4, 1])
+        with col_mid:
+            with st.expander("🛠️ 自建机器人配置指引", expanded=True):
+                st.info("""
+                **操作指引：**
+                1. 在您的钉钉群：设置 -> 智能群助手 -> 添加机器人 -> 自定义。
+                2. 安全设置：勾选 **【自定义关键词】**，输入：**预警**。
+                3. 复制生成的 Webhook 地址填入下方。
+                """)
+                user_webhook = st.text_input(
+                    "请输入您的 Webhook 地址", 
+                    placeholder="https://oapi.dingtalk.com/robot/send?access_token=...",
+                    label_visibility="visible"
+                )
+                if user_webhook:
+                    user_webhook_check(user_webhook)
+                else:
+                    st.warning("⚠️ 请输入 Webhook 地址以继续配置。")
+                    final_webhook = ""
+    # ================= 2. 规则配置表单 =================
+    st.write("---")
+    st.write("---")
+    st.markdown("### 第二步：设定报警阈值")
+    st.info("💡 提示：指定大棚的规则优先级高于全局规则。如果该大棚已有特定规则，全局设置将不会覆盖它。")
+    sensor_category = st.radio(
+        "👉 请先选择要配置的传感器大类：",
+        ["📊 数值型 (如温湿度、光强、PH值)", "🎛️ 开关/状态型 (如设备启停、漏水状态)"],
+        horizontal=True
+    )
+    if "数值型" in sensor_category:
+        target_types = 1
+    else:
+        target_types = 2
+    gh_names = ["所有大棚"] + [d['deviceName'] for d in get_sorted_devices(st.session_state.device_data)]
     
-    # 【需求8】阈值报警及短信微信
-    st.subheader("报警规则设定")
-    with st.form("alert_settings"):
-        st.selectbox("应用范围", ["全局所有大棚", "单独指定大棚"])
-        c1, c2 = st.columns(2)
-        c1.number_input("温度上限报警阈值 (°C)", value=35)
-        c2.number_input("温度下限报警阈值 (°C)", value=10)
+    c1, c2 = st.columns(2)
+    target_gh = c1.selectbox("应用范围", gh_names)
+    # ================= 2. 严密的传感器提取逻辑 (交集 vs 单体) =================
+    metric_info_map = {} # { "空温": {"unit": "℃", "type": 1} }
+    metric_opts = []
+    if target_gh == "所有大棚":
+        # 【全局模式】：求所有大棚传感器的交集
+        common_metrics = None # 用于存储交集
+        for d in st.session_state.device_data:
+            current_gh_metrics = set() # 当前大棚的传感器集合
+            for s in d.get('sensorsList', []):
+                if s.get('sensorTypeId') == target_types:
+                    value = str(s.get("value", ""))
+                    if s.get('sensorTypeId') == 1 and value in ['0', '0.0', '']:
+                        continue
+                    name = s.get("sensorName", "")
+                    unit = s.get("unit", "")
+                    base_name = re.sub(r'^\d+[号组]', '', name).strip()
+                    if base_name:
+                        current_gh_metrics.add(base_name)
+                        metric_info_map[base_name] = {"unit": unit, "type": s.get('sensorTypeId') }
+            # 求交集算法
+            if common_metrics is None:
+                common_metrics = current_gh_metrics # 第一个大棚作为初始集合
+            else:
+                common_metrics = common_metrics.intersection(current_gh_metrics) # 连续求交集
+        # 只保留公共的传感器
+        metric_opts = sorted(list(common_metrics)) if common_metrics else []
+    else:# 【局部模式】：只读取指定大棚的数值传感器且数值非零
+        for d in st.session_state.device_data:
+            if d['deviceName'] == target_gh:
+                for s in d.get('sensorsList', []):
+                    if s.get('sensorTypeId') in target_types:
+                        value = str(s.get("value", ""))
+                        if s.get('sensorTypeId') and value in ['0', '0.0', '']:
+                            continue
+                        name = s.get("sensorName", "")
+                        unit = s.get("unit", "")
+                        base_name = re.sub(r'^\d+[号组]', '', name).strip()
+                        if base_name:
+                            metric_info_map[base_name] = {"unit": unit, "type": s.get('sensorTypeId')}
+                break
+        print(f"局部模式下 {target_gh} 的传感器与单位映射:", metric_info_map) 
+        metric_opts = sorted(list(metric_info_map.keys()))
+    # ================= 3. 渲染配置表单 =================
+    if not metric_opts:
+        st.warning(f"⚠️ 在【{target_gh}】下，没有找到符合要求的 **{sensor_category.split(' ')[1]}** 传感器。")
+        st.stop()
+    target_metric = c2.selectbox("监控指标", metric_opts)
+    current_info = metric_info_map.get(target_metric, {"unit": "", "type": 1})
+    current_unit = current_info["unit"]
+    data_type = current_info["type"]
+    # 获取默认阈值配置 (仅针对数值型有用)
+    current_cfg = {"unit": current_unit, "min": -10000.0, "max": 100000.0, "step": 1.0, "def_min": 0.0, "def_max": 100.0}
+    if data_type == 1:
+        for key, cfg in METRIC_BEHAVIOR.items():
+            if target_metric and key in target_metric:
+                current_cfg = cfg
+                break
+    form_key = f"{target_gh}_{target_metric}"
+    with st.form(form_key):
+        if target_gh == "所有大棚":
+            st.write(f"正在配置：**🌍 全局通用** 的 **{target_metric}** 预警")
+        else:
+            st.write(f"正在配置：**📍 指定大棚 ({target_gh})** 的 **{target_metric}** 预警")
+        if data_type == 1:
+            st.caption(f"📏 数据单位：`{current_unit}`")
+            v2, v1 = st.columns(2)
+            max_v = v1.number_input(
+                f"上限阈值 ({current_cfg['unit']})",
+                min_value=float(current_cfg['min']),
+                max_value=float(current_cfg['max']),
+                value=float(current_cfg['def_max']),
+                step=float(current_cfg['step'])
+            )
+            min_v = v2.number_input(
+                f"下限阈值 ({current_cfg['unit']})",
+                min_value=float(current_cfg['min']),
+                max_value=float(current_cfg['max']),
+                value=float(current_cfg['def_min']),
+                step=float(current_cfg['step'])
+            )
+        else:
+            st.info("💡 **开关/状态量报警**：请选择触发报警的目标状态。")
+            # 使用下拉框代替数字输入，防呆设计
+            status_choice = st.selectbox(
+                "当状态变为以下值时报警：", 
+                options=[1, 0], 
+                format_func=lambda x: "🟢 状态 1 (通常代表异常/开启)" if x == 1 else "🔴 状态 0 (通常代表恢复/关闭)"
+            )
+            # 对于开关量，借用 max_val 存储触发状态，min_val 设为占位符
+            max_v = float(status_choice)
+            min_v = -999.0 
         
-        st.markdown("**推送接收人设置**")
-        st.checkbox("开启短信推送")
-        st.text_input("接收手机号", "13800000000")
-        st.checkbox("开启微信公众号/企业微信推送")
-        
-        if st.form_submit_button("保存配置"):
-            st.toast("预警规则保存成功！")
+        submit = st.form_submit_button("🚀 部署预警策略", type="primary")
+        # ================= 4. 提交保存逻辑 =================
+        if submit:
+            with st.spinner("正在写入云端规则..."):
+                try:
+                    import db_manager
+                    db_manager.init_db() # 确保表结构存在
+                    conn = db_manager.get_connection()
+                    with conn.cursor() as cursor:
+                        sql = """
+                            INSERT INTO alert_rules
+                            (
+                                target_gh,
+                                metric_name,
+                                min_val,
+                                max_val,
+                                ding_webhook
+                            )
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON DUPLICATE KEY UPDATE
+                            min_val=%s,
+                            max_val=%s,
+                            ding_webhook=%s
+                        """
+                        if target_gh == "所有大棚":
+                            # 提取出所有真实存在的大棚名称
+                            actual_targets = [d['deviceName'] for d in st.session_state.device_data]
+                        else:
+                            actual_targets = [target_gh]
+                        # 遍历实际的大棚列表，逐个写入/更新规则
+                        for gh in actual_targets:
+                            cursor.execute(sql, (
+                                gh,             # 动态分配的真实大棚名称 (如: 01号大棚)
+                                target_metric,  # 比如: 空温 或 漏水传感器
+                                min_v,
+                                max_v,
+                                final_webhook,  # Insert 参数
+                                min_v,
+                                max_v,
+                                final_webhook   # Update 参数
+                            ))
+                            
+                    conn.commit()
+                    conn.close()
+                    st.balloons()
+                    
+                    # 🌟 体验优化：根据是全局还是局部，给予不同的成功提示
+                    if target_gh == "全局所有大棚":
+                        st.success(f"✅ 已成功为 **{len(actual_targets)}** 个大棚批量部署【{target_metric}】的报警策略！")
+                    else:
+                        st.success(f"✅ 【{target_gh}】的【{target_metric}】报警策略部署成功！")
+
+                except Exception as e:
+                    st.error(f"⚠️ 保存失败: {e}")

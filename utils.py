@@ -26,13 +26,17 @@ def convert_device_data(device_tuples):
         converted_data.append(device_dict)
     return converted_data
 
-def get_color(data):
-    if data["is_alarms"] == 1:
-        return "red"
-    elif data["is_line"] == 0:
-        return "yellow"
-    else:
-        return "green"
+
+
+def get_sorted_devices(device_list):
+    """
+    将设备列表按照名称开头的数字进行排序
+    """
+    def extract_num(name):
+        match = re.search(r'^(\d+)', str(name))
+        return int(match.group(1)) if match else 9999
+    
+    return sorted(device_list, key=lambda x: extract_num(x.get('deviceName', '')))
 
 
 
@@ -558,3 +562,35 @@ def weather_alert_settings():
     if st.button("💾 保存预警设置", use_container_width=True):
         st.toast("✅ 预警设置已保存", icon="✅")
         st.rerun()
+    
+    
+# 钉钉网址确认
+def dingding_webhook_check(webhook_url):
+    payload = {
+    "msgtype": "text",
+    "text": {
+        "content": "预警：测试消息"
+    }}
+
+    response = requests.post(webhook_url, json=payload)
+    return response.json()['errmsg'] != "ok"
+
+def user_webhook_check(webhook_url):
+    if not webhook_url.startswith("https://oapi.dingtalk.com/robot/send?access_token="):
+        st.error("❌ Webhook 地址必须以 https://oapi.dingtalk.com/robot/send?access_token= 开头")
+        return False
+    token_part = webhook_url.split("access_token=")[-1]
+    if len(token_part) != 64:
+        st.error("❌ Webhook 地址中的 access_token 长度不正确，应为64位")
+        return False
+    st.success("✅ Webhook 地址格式正确")
+    return True
+
+
+
+############# 文本操作
+# 温室名排序
+def extract_gh_num(name):
+    # 使用正则表达式提取字符串开头的数字，例如从 "01号青海..." 提取出 1
+    match = re.search(r'^(\d+)', str(name))
+    return int(match.group(1)) if match else 9999
