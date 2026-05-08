@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import time
 from datetime import datetime, timedelta
 import plotly.express as px
+from datetime import datetime, timedelta
 import plotly.graph_objects as got
 
 from sheduler import device_info_get
@@ -32,12 +33,7 @@ with st.sidebar:
         "📋 批次工单与联控 (抓生产)",
         "⚙️ 策略与预警 (设规则)"
     ])
-    # 检查是否有设备数据
-    if not st.session_state.get('device_data'):
-        st.warning("👈 请点击左侧【同步云端最新数据】获取设备信息。")
-    
-    st.divider()
-    
+
     data = device_info_get() 
     st.session_state.device_data = data.get("dataList", [])
 
@@ -45,12 +41,9 @@ with st.sidebar:
         st.session_state.logged_in = False
         st.rerun()
 
-# if not st.session_state.logged_in:
-#     st.info("请先登录系统。")
-#     
 
-if not st.session_state.device_data:
-    st.warning("👈 请点击左侧【同步云端最新数据】拉取平台台账。")
+# if not st.session_state.device_data:
+#     st.warning("👈 请点击左侧【同步云端最新数据】拉取平台台账。")
 
 # ==================== 4. 核心业务页面 ====================
 
@@ -65,7 +58,6 @@ if menu == "🌐 设备整体状态":
         lat = first_device.get('lat')
         lng = first_device.get('lng')
         
-        # 假设你已经定义了 WEATHER_API_KEY
         weather_info = get_weather_amap(lat, lng, WEATHER_API_KEY)
         if weather_info:
             # 1. 获取预警结果
@@ -109,7 +101,7 @@ if menu == "🌐 设备整体状态":
                 new_enable = st.checkbox("启用天气预警", value=config['enable_alerts'])
 
             # 提交按钮
-            submit_btn = st.form_submit_button("💾 保存配置", type="primary", use_container_width=True)
+            submit_btn = st.form_submit_button("💾 保存配置", type="primary", width = 'stretch')
             
             if submit_btn:
                 # 将用户输入的新值覆盖到 session_state 中
@@ -138,7 +130,6 @@ if menu == "🌐 设备整体状态":
             {"name": f"报警 ({alarm_cnt})", "color": "#EF553B", "condition": lambda d: d.get('isLine',0) != 0 and d.get('isAlarms',0) == 1},
             {"name": f"离线 ({offline_cnt})", "color": "#FFA15A", "condition": lambda d: d.get('isLine',0) == 0}
         ]
-
         # 4. 遍历配置，分别添加图层 (Trace)
         for config in status_configs:
             lats = []
@@ -149,7 +140,6 @@ if menu == "🌐 设备整体状态":
                 if config["condition"](d):
                     base_lat = float(d.get('lat', 36.73291))
                     base_lng = float(d.get('lng', 101.74776))
-                    
                     # 微小网格偏移（防止坐标完全相同导致重叠）
                     offset_lat = base_lat + ((idx // 3) - 1) * 0.00015  
                     offset_lng = base_lng + ((idx % 3) - 1) * 0.00015
@@ -160,8 +150,6 @@ if menu == "🌐 设备整体状态":
                     # 自定义鼠标悬浮提示的文本
                     status_str = config['name'].split(' ')[0]
                     texts.append(f"<b>{d.get('deviceName', f'设备{idx}')}</b><br>状态: {status_str}")
-            
-            # 【核心】：添加图层，即使 lats 和 lngs 是空的，也能强制在左上角渲染出图例！
             fig.add_trace(go.Scattermapbox(
                 lat=lats,
                 lon=lngs,
@@ -198,7 +186,7 @@ if menu == "🌐 设备整体状态":
             height=400
         )
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width = 'stretch')
 
     else:
         st.info("暂无设备坐标数据")
@@ -208,39 +196,75 @@ if menu == "🌐 设备整体状态":
     st.caption("选择大棚，查看其挂载的所有实时传感器数据。")
     
     device_names = [d['deviceName'] for d in st.session_state.device_data]
-    selected_gh = st.selectbox("👉 选择要查看的大棚", device_names)
+
+    col_1, col_2 = st.columns(2)
+    with col_1:
+        selected_gh = st.selectbox("🏠 选择要查看的大棚", device_names)
+    with col_2:
+        # 数值类型 1 开关类型 2
+        selected_type_label = st.selectbox("🔍 选择传感器类型", ["数值","开关"])
+        
+    selected_type_flag = 1 if selected_type_label == "数值" else 2
     
-    # 找到选中的那个设备的完整数据
     target_device = next(d for d in st.session_state.device_data if d['deviceName'] == selected_gh)
-    sensors_list = target_device.get("sensorsList")
+    sensors_list = target_device.get("sensorsList", [])
     
     if not sensors_list:
         st.info(f"暂未获取到 {selected_gh} 的传感器数据 (sensorsList 为 null)。")
     else:
         # 过滤出真正的传感器 (过滤掉开关类设备，假设 sensorTypeId == 1 为数值传感器)
-        env_sensors = [s for s in sensors_list if s.get('sensorTypeId') == 1 and s.get("value") not in  ['0','0.0']]
+        env_sensors = [s for s in sensors_list if s.get('sensorTypeId') == selected_type_flag and \
+            (s.get('sensorTypeId') != 1 or s.get("value") not in ['0', '0.0', ]
+    )]
         
         if env_sensors:
-            # 使用栅格布局整齐地展示几十个传感器
-            cols_sensor = st.columns(4) # 每行放 4 个传感器
+            st.markdown("""
+                <style>
+                .sensor-card {
+                    background-color: #ffffff;
+                    padding: 15px;
+                    border-radius: 12px;
+                    margin-bottom: 15px;
+                    border: 1px solid #eee;
+                    box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+                    transition: transform 0.3s ease, box-shadow 0.3s ease;
+                    cursor: default;
+                }
+                .sensor-card:hover {
+                    transform: translateY(-5px);
+                    box-shadow: 5px 10px 20px rgba(0,0,0,0.1);
+                    border-color: #1f77b4;
+                }
+                .sensor-label { font-size: 13px; color: #888; margin-bottom: 5px; }
+                .sensor-value { font-size: 22px; font-weight: 700; color: #1f77b4; }
+                .sensor-unit { font-size: 14px; color: #999; margin-left: 3px; }
+                </style>
+            """, unsafe_allow_html=True)
+
+            # 展示传感器
+            cols = st.columns(4)
             for idx, sensor in enumerate(env_sensors):
                 s_name = sensor.get("sensorName", "未知")
-                s_val = sensor.get("value", "--")
                 s_unit = sensor.get("unit", "")
-                
-                with cols_sensor[idx % 4]:
-                    # 用卡片样式包裹 metric，看起来更像独立仪表盘
+                # 逻辑：根据类型展示不同的“值”
+                st_id = sensor.get('sensorTypeId')
+                if st_id in [2, 5]: # 开关型
+                    s_val = "开启" if sensor.get("switcher") == 1 else "关闭"
+                elif st_id == 1: # 数值型
+                    s_val = sensor.get("value", "--")
+                else:
+                    s_val = sensor.get("value") or sensor.get("switcher") or "--"
+
+                with cols[idx % 4]:
                     st.markdown(f"""
-                    <div style="background-color:#f8f9fa; padding:10px; border-radius:5px; margin-bottom:10px; border-left: 4px solid #1f77b4;">
-                        <div style="font-size:14px; color:#666;">{s_name}</div>
-                        <div style="font-size:24px; font-weight:bold; color:#333;">{s_val} <span style="font-size:14px; color:#999;">{s_unit}</span></div>
-                    </div>
+                        <div class="sensor-card">
+                            <div class="sensor-label">{s_name}</div>
+                            <div class="sensor-value">{s_val}<span class="sensor-unit">{s_unit}</span></div>
+                        </div>
                     """, unsafe_allow_html=True)
         else:
-            st.info("该设备下未挂载环境传感器。")
+            st.warning(f"该设备下没有【{selected_type_label}】类型的传感器。")
             
-   
-          
     # 【需求4】跨棚均值对比
     st.subheader("📊 主页跨棚数据对比 (需求4)")
     st.caption("选择传感器，从数据库拉取历史数据绘制趋势对比曲线。")
@@ -253,34 +277,54 @@ if menu == "🌐 设备整体状态":
                 valid_metric_names.add(s.get("sensorName"))
                 
     metric_opts = sorted(list(valid_metric_names))
+    col_m1, col_m2 = st.columns([2, 1])
     
     if not metric_opts:
         st.info("当前设备未挂载有效的环境传感器数据。")
     else:
-        chart_metric = st.selectbox("👉 请选择要对比的传感器指标", metric_opts)
-        # 2. 准备查询数据库的时间范围 (例如查询过去 24 小时)
-        end_time = datetime.now()
-        start_time = end_time - timedelta(days=1)
-        start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-        end_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+        with col_m1:
+            selected_metric = st.selectbox("🎯 选择对比指标", metric_opts)
+        with col_m2:
+            # 增加时间维度筛选
+            time_range = st.selectbox(
+                "🕒 时间范围", 
+                ["当前1小时", "今日", "最近一周", "最近一月"],
+                index=1  # 默认选择“今日”
+            )
+        now = datetime.now()
+        if time_range == "当前1小时":
+            start_time = now - timedelta(hours=1)
+        elif time_range == "今日":
+            start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif time_range == "最近一周":
+            start_time = now - timedelta(days=7)
+        else:  # 最近一月
+            start_time = now - timedelta(days=30)
+
+        st.caption(f"📅 统计范围：{start_time.strftime('%Y-%m-%d %H:%M:%S')} 至 现在")
+        
+        # start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
+        # end_str = now.strftime("%Y-%m-%d %H:%M:%S")
         
         # 3. 基于精确的名字找到 ID，并从数据库拉取数据
         line_chart_data = []
-        
         with st.spinner("正在从数据库拉取历史时序数据..."):
+            # 方式 1 本地数据库查询（推荐，效率更高）
             import database_manager # 确保引入了你的数据库模块
-            
+            # 方式 2 从 在线数据库中查找
+            import db_manager
             for d in st.session_state.device_data:
                 gh_name = d.get("deviceName", "未知大棚")
                 sensors_list = d.get('sensorsList') or []
                 
                 # 精确匹配传感器名称，获取其专属 ID
-                target_sensor = next((s for s in sensors_list if s.get("sensorName") == chart_metric), None)
-                
+                target_sensor = next((s for s in sensors_list if s.get("sensorName") == selected_metric), None)
                 if target_sensor:
                     sensor_id = target_sensor.get("id")
                     # 依据 sensor_id 查询数据库中的历史记录
-                    history_records = database_manager.get_sensor_history(sensor_id, start_str, end_str)
+                    # history_records = database_manager.get_sensor_history(sensor_id, start_str, end_str)
+                    history_records = db_manager.get_sensor_history_tidb(sensor_id, start_time, now)
+                    
                     for record in history_records:
                         line_chart_data.append({
                             "温室名称": gh_name,
@@ -288,30 +332,108 @@ if menu == "🌐 设备整体状态":
                             "数值": float(record["value"]),
                             "单位": target_sensor.get("unit")
                         })
-        
-        # 4. 使用 Plotly 渲染趋势曲线图ue
-        df_curve = pd.DataFrame(line_chart_data)
-        
-        if not df_curve.empty:
-            # 确保时间列为 datetime 格式，防止图表 X 轴错乱
-            df_curve["采集时间"] = pd.to_datetime(df_curve["采集时间"])
+        if line_chart_data:
+            df_plot = pd.DataFrame(line_chart_data)
+            df_plot["采集时间"] = pd.to_datetime(df_plot["采集时间"])
+            df_plot["数值"] = pd.to_numeric(df_plot["数值"], errors='coerce')
+            unit_str = line_chart_data[0].get("单位", "")
+
+            # 1. 自动日期探测
+            now = datetime.now()
+            actual_min_date = df_plot["采集时间"].min().date()
+            actual_max_date = df_plot["采集时间"].max().date()
+            # 计算数据实际跨越的天数
+            date_span = (actual_max_date - actual_min_date).days
+
+            days_map = {"最近一周": 7, "最近一月": 30}
             
-            fig_curve = px.line(
-                df_curve, 
-                x="采集时间", 
-                y="数值", 
-                color="温室名称",
-                title=f"各棚 【{chart_metric}】 过去24小时趋势曲线",
-                markers=True # 在折线上显示数据点
-            )
-            fig_curve.update_layout(
-                xaxis_title="", 
-                yaxis_title="传感器数值",
-                hovermode="x unified" # 鼠标悬浮时，出现一条垂直线同时对比所有大棚的值
-            )
-            st.plotly_chart(fig_curve, use_container_width=True)
-        else:
-            st.warning("数据库中暂无该指标的历史数据，请确保后台同步脚本正在运行。")
+            if time_range in days_map:
+                theory_start = (now - timedelta(days=days_map[time_range])).date()
+                if actual_min_date > theory_start:
+                    st.info(f"💡 数据库最早记录为 **{actual_min_date}**，已为您展示至今趋势。")
+
+                # --- 2. 核心：智能频率判断 ---
+                if date_span < 1:
+                    # 💡 逻辑修正：如果实际数据不足 2 天，按“小时”聚合，防止出现“糖葫芦”点图
+                    sample_rule = '1h' 
+                    x_col = "采集时间"
+                    is_category = False
+                    axis_format = "%m-%d %H:%M"
+                else:
+                    # 正常跨天数据，按“天”聚合
+                    sample_rule = '1d'
+                    x_col = "日期标签"
+                    is_category = True
+                    axis_format = "%m-%d"
+
+                final_df_list = []
+                for gh in df_plot["温室名称"].unique():
+                    gh_df = df_plot[df_plot["温室名称"] == gh].set_index("采集时间")
+                    resampled = gh_df["数值"].resample(sample_rule).mean().reset_index()
+                    
+                    if is_category:
+                        resampled["日期标签"] = resampled["采集时间"].dt.strftime('%m-%d')
+                    
+                    resampled["温室名称"] = gh
+                    final_df_list.append(resampled)
+                
+                df_curve = pd.concat(final_df_list).dropna(subset=["数值"])
+                df_curve = df_curve.sort_values("采集时间")
+            else:
+                # 当前1小时/今日：原始精度
+                df_curve = df_plot.copy().sort_values("采集时间")
+                x_col = "采集时间"
+                is_category = False
+                axis_format = "%H:%M"
+
+            # --- 3. 渲染图表 ---
+            if not df_curve.empty:
+                fig_curve = px.line(
+                    df_curve, x=x_col, y="数值", color="温室名称",
+                    title=f"📈 {time_range} 各棚【{selected_metric}】趋势对比",
+                    markers=True
+                )
+                
+                if is_category:
+                    fig_curve.update_xaxes(type='category', categoryorder='category ascending')
+                else:
+                    fig_curve.update_xaxes(tickformat=axis_format)
+
+                fig_curve.update_layout(
+                    xaxis_title="", 
+                    yaxis_title=f"数值 ({unit_str})" if unit_str else "数值",
+                    hovermode="x unified",
+                    margin=dict(l=20, r=20, t=40, b=20)
+                )
+                
+                fig_curve.update_traces(hovertemplate='%{y:.2f}') 
+                st.plotly_chart(fig_curve, use_container_width=True)
+
+            
+            
+        # # 4. 使用 Plotly 渲染趋势曲线图ue
+        # df_curve = pd.DataFrame(line_chart_data)
+        
+        # if not df_curve.empty:
+        #     # 确保时间列为 datetime 格式，防止图表 X 轴错乱
+        #     df_curve["采集时间"] = pd.to_datetime(df_curve["采集时间"])
+            
+        #     fig_curve = px.line(
+        #         df_curve, 
+        #         x="采集时间", 
+        #         y="数值", 
+        #         color="温室名称",
+        #         title=f"{time_range} 各棚 【{ selected_metric}】传感器数据趋势曲线",
+        #         markers=True # 在折线上显示数据点
+        #     )
+        #     fig_curve.update_layout(
+        #         xaxis_title="", 
+        #         yaxis_title="传感器数值",
+        #         hovermode="x unified" # 鼠标悬浮时，出现一条垂直线同时对比所有大棚的值
+        #     )
+        #     st.plotly_chart(fig_curve, width = 'stretch')
+        # else:
+        #     st.warning("数据库中暂无该指标的历史数据，请确保后台同步脚本正在运行。")
 
 # ----------------- 页面二：单棚孪生与控制 -----------------
 elif menu == "🎮 单棚孪生与控制 (管细节)":
@@ -438,7 +560,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                     title=f"各棚【{x_metric}】对【{y_metric}】的相关性影响"
                 )
                 fig_scatter.update_traces(marker=dict(size=12))
-                st.plotly_chart(fig_scatter, use_container_width=True)
+                st.plotly_chart(fig_scatter, width = 'stretch')
                 
                 # 相关性
                 # 计算皮尔逊相关系数
@@ -491,7 +613,7 @@ elif menu == "📈 多维数据分析 (查根因)":
         #         title=f"各棚【{x_metric}】对【{y_metric}】的相关性影响"
         #     )
         #     fig_scatter.update_traces(marker=dict(size=12))
-        #     st.plotly_chart(fig_scatter, use_container_width=True)
+        #     st.plotly_chart(fig_scatter, width = 'stretch')
         # else:
         #     st.info(f"暂无法在各棚中同时匹配到有效的【{x_metric}】和【{y_metric}】数据。")
             
@@ -540,7 +662,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                 title=f"各棚【{agg_base}】前中后区域分布"
             )
             fig_agg.update_layout(yaxis_title=f"{agg_base} 数值")
-            st.plotly_chart(fig_agg, use_container_width=True)
+            st.plotly_chart(fig_agg, width = 'stretch')
         else:
             st.info(f"未能在设备中检测到区分前中后的【{agg_base}】数据。")
             
@@ -604,7 +726,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                                 data=csv_data,
                                 file_name=f"{export_gh}_{export_sensor_name}_历史数据.csv",
                                 mime="text/csv",
-                                use_container_width=True
+                                width = 'stretch'
                             )
         else:
             st.info("请选择一个完整的起止日期范围。")
@@ -652,7 +774,7 @@ elif menu == "📋 批次工单与联控 (抓生产)":
             action = st.selectbox("2. 自动识别并选择统一执行的动作", action_options)
             
             # 5. 执行下发
-            if st.button("🚀 下发联控指令", type="primary", use_container_width=True):
+            if st.button("🚀 下发联控指令", type="primary", width = 'stretch'):
                 if not target_ghs:
                     st.warning("请至少选择一个温室！")
                 elif "⚠️" in action:
@@ -701,7 +823,7 @@ elif menu == "📋 批次工单与联控 (抓生产)":
         
         fig_batch = px.line(x=dates, y=temps, title=f"{batch_no} 历史日均温曲线", labels={"x": "日期", "y": "日均温 (℃)"})
         fig_batch.update_layout(height=250, margin={"t":30, "b":0})
-        st.plotly_chart(fig_batch, use_container_width=True)
+        st.plotly_chart(fig_batch, width = 'stretch')
         
 
 # ----------------- 页面五：策略与预警 -----------------

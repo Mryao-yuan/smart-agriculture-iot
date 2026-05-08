@@ -1,5 +1,6 @@
 import json
 import requests
+import re
 import streamlit as st
 
 
@@ -375,19 +376,39 @@ def init_weather_alert_config():
             'humidity_low': 20,   # 低湿预警阈值（%）
             'enable_alerts': True  # 是否启用预警
         }
-
+# 风力解析
+def parse_wind_value(wind_str):
+    """
+    尝试从风力字符串中提取数字。
+    例如: '≤3' -> 3.0, '4级' -> 4.0, '3~4' -> 4.0 (取最大)
+    如果完全没有数字，则返回 None
+    """
+    if isinstance(wind_str, (int, float)):
+        return float(wind_str)
+    
+    # 使用正则表达式寻找字符串中的所有数字（包含小数）
+    numbers = re.findall(r"[-+]?\d*\.\d+|\d+", str(wind_str))
+    
+    if not numbers:
+        return None
+    
+    # 如果有多个数字（比如 3~4级），取最大的那个作为预警参考
+    return max(float(n) for n in numbers)      
+    
 def get_weather_alert(weather_info, config):
     """
     根据天气信息和用户配置生成预警信息
     """
+    # print(weather_info)  # 调试输出天气信息
     if not config.get('enable_alerts', True):
         return None, "✅ 预警功能已关闭"
     alerts = []
     alert_level = "info"  # info, warning, error
     # 获取天气数值
     temp = float(weather_info.get('temperature', 0))
-    humidity = float(weather_info.get('humidity', 0))
-    wind_power = float(weather_info.get('wind_power', 0))
+    humidity = int(weather_info.get('humidity', 0))
+    raw_wind = weather_info.get('wind_power', "0")
+    current_wind_val = parse_wind_value(raw_wind)
     weather = weather_info.get('weather', '')
     
     # 检查高温预警
@@ -399,9 +420,16 @@ def get_weather_alert(weather_info, config):
         alert_level = "error"
     
     # 检查大风预警
-    if wind_power >= config.get('wind_power', 5):
-        alerts.append(f"💨 大风预警：当前风力 {wind_power}级 ≥ {config['wind_power']}级")
-        alert_level = "error"
+    threshold_wind = float(config.get('wind_power', 5))
+    if current_wind_val is not None:
+        # 只有解析出数字，才进行数值比较
+        if current_wind_val >= threshold_wind:
+            alerts.append(f"💨 大风预警：当前风力 {raw_wind} ≥ 阈值 {threshold_wind}级")
+            alert_level = "error"
+    else:
+        # 如果解析不出数字（比如风力信息是 "持续风"），直接作为字符串展示，不触发数值报警
+        # 或者你可以根据需要添加字符串包含判断，比如 if "大风" in raw_wind:
+        pass
     
     # 检查湿度预警
     if humidity >= config.get('humidity_high', 80):

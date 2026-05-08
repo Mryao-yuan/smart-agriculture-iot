@@ -232,3 +232,79 @@ def get_sensor_history_by_time(sensor_id, start_str, end_str):
             return cursor.fetchall() # DictCursor 会直接返回字典列表
     finally:
         conn.close()
+
+def get_sensor_history_tidb(sensor_id, start_time, end_time,fallback_limit=20):
+    """
+    从远端 TiDB 获取传感器历史数据
+    :param sensor_id: 传感器ID
+    :param start_time: 起始时间 (字符串 '2023-01-01 00:00:00' 或 datetime对象)
+    :param end_time: 结束时间
+    """
+    # 使用之前定义的获取连接函数
+    conn = get_connection() 
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            # --- 1. 尝试按时间范围查询 ---
+            sql_range = """
+                SELECT add_time, value
+                FROM sensor_history
+                WHERE sensor_id = %s
+                AND add_time BETWEEN %s AND %s
+                ORDER BY add_time ASC
+            """
+            cursor.execute(sql_range, (sensor_id, start_time, end_time))
+            rows = cursor.fetchall()
+            # --- 2. 自动保底：如果范围查询结果为空，取最新数据 ---
+            if not rows:
+                sql_fallback = """
+                    SELECT add_time, value FROM sensor_history
+                    WHERE sensor_id = %s ORDER BY add_time DESC LIMIT %s
+                """
+                cursor.execute(sql_fallback, (sensor_id, fallback_limit))
+                rows = cursor.fetchall()
+                rows.reverse()
+                for r in rows: r['is_fallback'] = True
+            return rows
+    except Exception as e:
+        print(f"❌ 数据库查询失败: {e}")
+        return []
+    finally:
+        conn.close()
+        
+def get_sensor_history_df(sensor_id, start_time, end_time):
+    """
+    使用 Pandas 直接从 TiDB 读取并返回 DataFrame，方便 Streamlit 绘图
+    """
+    conn = get_connection()
+    try:
+        sql = """
+            SELECT add_time, value
+            FROM sensor_history
+            WHERE sensor_id = %s
+            AND add_time BETWEEN %s AND %s
+            ORDER BY add_time
+        """
+        # pd.read_sql 会自动处理连接和关闭（部分版本建议配合 sqlalchemy）
+        df = pd.read_sql(sql, conn, params=(sensor_id, start_time, end_time))
+        return df
+    finally:
+        conn.close()
+
+def get_compare_data(sensor_name, start_time):
+    conn = get_connection()
+    query = """
+        SELECT 
+            d.gh_name, 
+            h.add_time, 
+            CAST(h.value AS DECIMAL(10,2)) as val
+        FROM sensor_history h
+        JOIN sensors s ON h.sensor_id = s.sensor_id
+        JOIN devices d ON s.device_id = d.device_id
+        WHERE s.sensor_name = %s 
+          AND h.add_time >= %s
+        ORDER BY h.add_time ASC
+    """
+    import pandas as pd
+    df = pd.read_sql(query, conn, params=(sensor_name, start_time))
+    conn.close()
+    return df

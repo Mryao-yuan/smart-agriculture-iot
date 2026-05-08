@@ -19,9 +19,8 @@ def run_single_sync():
         return
     data = client.get_devices_sensor_datas()
     if data:
-        # 存入 TiDB 数据库
         db_manager.sync_iot_nested_data(data)
-        # print("✅ [云端调度] 单次同步入库完成！")
+        print("✅ [云端调度] 单次同步入库完成！")
     else:
         print("⚠️ [云端调度] 未获取到有效数据。")
 

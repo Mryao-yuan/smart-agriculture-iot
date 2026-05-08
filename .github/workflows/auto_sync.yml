@@ -1,8 +1,8 @@
 name: IoT 农业数据自动同步
 
 on:
-  schedule:
-    - cron: '*/10 * * * *' # 每 10 分钟执行一次
+  # schedule:
+    # - cron: '*/10 * * * *' # 每 10 分钟执行一次
   workflow_dispatch: # 允许网页端手动触发
 
 jobs:
