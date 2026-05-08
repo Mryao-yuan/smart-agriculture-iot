@@ -1,5 +1,7 @@
 import pymysql
 import streamlit as st
+import time
+import json
 from datetime import datetime
 
 # connect with TiDB Cloud using pymysql
@@ -21,50 +23,97 @@ def get_connection():
     )
 
 def init_db():
-    """初始化云端数据库表"""
+    """初始化 TiDB 云端数据库并自动建表（适配嵌套同步逻辑）"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            # 1. 设备表 (注意：SQLite 的 AUTOINCREMENT 在 MySQL 里是 AUTO_INCREMENT)
+            # 1. 创建报警配置表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS alert_config (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    target_gh VARCHAR(100),
+                    max_temp DOUBLE,
+                    min_temp DOUBLE,
+                    sms_enabled TINYINT(1),
+                    phone VARCHAR(20),
+                    wechat_enabled TINYINT(1),
+                    pushplus_token VARCHAR(255)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ''')
+            
+            # 2. 创建农事工单记录表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS work_orders (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    gh_name VARCHAR(100),
+                    task_type VARCHAR(50),
+                    operator VARCHAR(50),
+                    content TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ''')
+            
+            # 3. 设备表 (与 sync_iot_nested_data 字段完全对应)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS devices (
-                    device_id BIGINT PRIMARY KEY,
-                    device_no VARCHAR(50) UNIQUE,
+                    device_id BIGINT PRIMARY KEY, 
+                    device_no VARCHAR(50),
                     gh_name VARCHAR(100),
-                    is_line TINYINT,
-                    is_alarms TINYINT,
                     lat DOUBLE,
                     lng DOUBLE,
+                    create_date DATETIME,
+                    default_timescale INT,
+                    ico_url VARCHAR(255),
+                    is_alarms TINYINT,
+                    is_delete TINYINT,
+                    is_line TINYINT,
+                    link_type VARCHAR(50),
+                    user_id BIGINT,
+                    user_name VARCHAR(50),
                     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')
-            
-            # 2. 传感器元数据表 (你遗漏的这张表补上了)
+
+            # 4. 传感器元数据表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS sensors (
-                    sensor_id BIGINT PRIMARY KEY, device_id BIGINT, sensor_name VARCHAR(100),
-                    sensor_type_id INT, unit VARCHAR(20), flag VARCHAR(20), decimal_places INT,
-                    heartbeat_date DATETIME, is_alarms TINYINT, is_delete TINYINT, is_line TINYINT,
-                    is_mapping TINYINT, lat DOUBLE, lng DOUBLE, order_num INT,
-                    sensor_mapping VARCHAR(100), user_id BIGINT, last_update DATETIME
-                )
+                    sensor_id BIGINT PRIMARY KEY,
+                    device_id BIGINT,
+                    sensor_name VARCHAR(100),
+                    sensor_type_id INT,
+                    unit VARCHAR(20),
+                    flag VARCHAR(20),
+                    decimal_places INT,
+                    heartbeat_date DATETIME, -- 补全 sync 逻辑中的字段
+                    is_alarms TINYINT,
+                    is_delete TINYINT,
+                    is_line TINYINT,
+                    is_mapping TINYINT,
+                    lat DOUBLE,
+                    lng DOUBLE,
+                    order_num INT,
+                    sensor_mapping VARCHAR(100),
+                    user_id BIGINT,
+                    last_update DATETIME
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')
-            
-            
-            # 2. 传感器历史表 (增加索引以优化性能)
+
+            # 5. 传感器历史时序数据表
+            # 注意：TiDB 自动为 UNIQUE 约束创建索引，不需额外手动创建 idx_sensor_time
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS sensor_history (
                     history_id BIGINT AUTO_INCREMENT PRIMARY KEY,
                     sensor_id BIGINT,
-                    value VARCHAR(255), 
+                    value VARCHAR(255),
                     add_time DATETIME,
                     UNIQUE KEY uk_sensor_time (sensor_id, add_time)
-                )
-            ''')
-            # 索引对云数据库非常重要
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sensor_time ON sensor_history(sensor_id, add_time)')
-            
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ''')        
         conn.commit()
+        print("✅ TiDB 云端数据库初始化成功，所有表结构已同步")
+    except Exception as e:
+        print(f"❌ 初始化数据库失败: {e}")
+        conn.rollback()
     finally:
         conn.close()
 
@@ -113,7 +162,6 @@ def sync_iot_nested_data(json_response):
             raw_switch = sensor.get("switcher")
 
             value = None
-
             try:
                 if sensor_type == 1:
                     value = str(float(raw_value)) if raw_value else "0"
