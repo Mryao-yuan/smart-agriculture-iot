@@ -35,4 +35,4 @@ jobs:
           EOF
 
       - name: 运行同步脚本
-        run: python sync_once.py
+        run: python sync_online.py
