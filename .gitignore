@@ -1,0 +1,16 @@
+# 忽略 Streamlit 密钥 (极其重要！)
+.streamlit/secrets.toml
+
+# 忽略 Python 缓存和虚拟环境
+__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+
+# 忽略本地遗留的 SQLite 数据库文件 (如果有的话)
+*.db
+
+# 本地测试文件
+*.ipynb
+*.json

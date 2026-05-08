@@ -1,0 +1,10 @@
+DB_NAME = "Smart_Agriculture.db"
+
+SYNC_INTERVAL = 300  # 秒
+
+USERNAME = "yys-zhw"
+PASSWORD = "123456"
+API_KEY = "ffec4dee9fa344208f9c3b6c870b4879"
+
+WEATHER_API_KEY = "d8bd7e4c3d59315deb2cbb5931296891"
+
