@@ -5,6 +5,8 @@ from config import *
 import pandas as pd
 import time
 
+# local SQLite database
+
 def init_db():
     """初始化数据库并自动建表"""
     conn = sqlite3.connect(DB_NAME)
@@ -98,8 +100,6 @@ def init_db():
     
     conn.commit()
     conn.close()
-
-
 
 
 def sync_iot_nested_data(json_response):
@@ -248,8 +248,6 @@ def sync_iot_nested_data(json_response):
         conn.close()
 
 
-
-
 # ==================== 报警配置 CRUD ====================
 def save_alert_config(target_gh, max_temp, min_temp, sms_enabled, phone, wechat_enabled, pushplus_token):
     """保存或更新报警配置 (这里为了简单，我们采用覆盖写入的方式，保持ID为1)"""
@@ -276,7 +274,6 @@ def save_alert_config(target_gh, max_temp, min_temp, sms_enabled, phone, wechat_
     conn.close()
 
 
-
 def get_alert_config():
     """读取报警配置"""
     conn = sqlite3.connect(DB_NAME)
@@ -290,7 +287,6 @@ def get_alert_config():
     if row:
         return dict(row)
     return {} # 如果没有数据，返回空字典
-
 # ==================== 物联网数据写入逻辑 ====================
 
 def upsert_devices(devices_json_list):
@@ -318,7 +314,6 @@ def upsert_devices(devices_json_list):
     conn.close()
 
 # ==================== 物联网数据读取逻辑 (给 app.py 用) ====================
-
 def get_devices():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
