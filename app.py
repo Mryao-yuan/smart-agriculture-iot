@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import time
 import re
 from datetime import datetime, timedelta
 import plotly.express as px
@@ -9,14 +8,31 @@ from datetime import datetime, timedelta
 import plotly.graph_objects as got
 
 from sheduler import device_info_get
-import database_manager 
-from  utils import display_devices_grid,get_weather_amap,init_weather_alert_config,get_weather_alert,\
-    get_sorted_devices,dingding_webhook_check,user_webhook_check,extract_gh_num
-from datetime import datetime
 from config import *
+import database_manager 
+
+
+from utils.weather import get_weather_amap,init_weather_alert_config,get_weather_alert
+from utils.login import check_password
+from utils.text_operate import extract_gh_num,get_sorted_devices
+from utils.alter import user_webhook_check
+from utils.style import load_local_css,generate_sensor_card_html
+from utils.controllers import handle_toggle_change
+from utils.iot_client import IotClient
+from datetime import datetime
+
+
+
+bg_path = "imgs/bg1.png"
+json_path="./users.json"
+
+
+# === login ===
+# if not check_password(bg_path,json_path):
+#     st.stop()
+
 # ==================== 1. 基础配置与全局工具 ====================
 st.set_page_config(page_title="智慧温室 AIoT 平台", layout="wide", page_icon="🌿")
-
 
 # ==================== 2. Session 状态初始化 ====================
 if 'logged_in' not in st.session_state:
@@ -30,7 +46,7 @@ with st.sidebar:
     # 页面路由菜单
     menu = st.radio("🏠 业务导航", [
         "🌐 设备整体状态", 
-        "🎮 单棚孪生与控制 (管细节)", 
+        # "🎮 单棚孪生与控制 (管细节)", 
         "📈 多维数据分析 (查根因)", 
         "📋 批次工单与联控 (抓生产)",
         "⚙️ 策略与预警 (设规则)"
@@ -42,7 +58,6 @@ with st.sidebar:
     if st.button("退出登录"):
         st.session_state.logged_in = False
         st.rerun()
-
 
 # if not st.session_state.device_data:
 #     st.warning("👈 请点击左侧【同步云端最新数据】拉取平台台账。")
@@ -152,12 +167,12 @@ if menu == "🌐 设备整体状态":
                     # 自定义鼠标悬浮提示的文本
                     status_str = config['name'].split(' ')[0]
                     texts.append(f"<b>{d.get('deviceName', f'设备{idx}')}</b><br>状态: {status_str}")
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 lat=lats,
                 lon=lngs,
                 mode='markers',
-                marker=go.scattermapbox.Marker(size=14, color=config["color"]),
-                name=config["name"], # 这里就是图例上显示的文字，如：正常 (9)
+                marker=dict(size=14, color=config["color"]), # 这里直接用 dict 写法更简洁，不易报错
+                name=config["name"], 
                 hoverinfo="text",
                 text=texts,
                 showlegend=True 
@@ -168,8 +183,8 @@ if menu == "🌐 设备整体状态":
 
         # 6. 配置地图底图和图例位置
         fig.update_layout(
-            mapbox_style="open-street-map",
-            mapbox=dict(
+            map_style="open-street-map",
+            map=dict(
                 center=dict(lat=center_lat, lon=center_lng),
                 zoom=12
             ),
@@ -197,7 +212,6 @@ if menu == "🌐 设备整体状态":
     st.subheader("🔍 设备传感器详细看板")
     st.caption("选择大棚，查看其挂载的所有实时传感器数据。")
     
-    # TODO 大棚按顺序显示，而不是乱序的设备列表
     device_names = [d['deviceName'] for d in st.session_state.device_data]
     sorted_device_names = sorted(device_names, key=extract_gh_num)
     
@@ -212,63 +226,73 @@ if menu == "🌐 设备整体状态":
     
     target_device = next(d for d in st.session_state.device_data if d['deviceName'] == selected_gh)
     sensors_list = target_device.get("sensorsList", [])
+    device_no = target_device.get("deviceNo")
+    is_online = target_device.get('isLine', False) # 设备是否在线
     
     if not sensors_list:
         st.info(f"暂未获取到 {selected_gh} 的传感器数据 (sensorsList 为 null)。")
     else:
-        # 过滤出真正的传感器 (过滤掉开关类设备，假设 sensorTypeId == 1 为数值传感器)
         env_sensors = [s for s in sensors_list if s.get('sensorTypeId') == selected_type_flag and \
             (s.get('sensorTypeId') != 1 or s.get("value") not in ['0', '0.0', ]
     )]
         
         if env_sensors:
-            st.markdown("""
-                <style>
-                .sensor-card {
-                    background-color: #ffffff;
-                    padding: 15px;
-                    border-radius: 12px;
-                    margin-bottom: 15px;
-                    border: 1px solid #eee;
-                    box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
-                    transition: transform 0.3s ease, box-shadow 0.3s ease;
-                    cursor: default;
-                }
-                .sensor-card:hover {
-                    transform: translateY(-5px);
-                    box-shadow: 5px 10px 20px rgba(0,0,0,0.1);
-                    border-color: #1f77b4;
-                }
-                .sensor-label { font-size: 13px; color: #888; margin-bottom: 5px; }
-                .sensor-value { font-size: 22px; font-weight: 700; color: #1f77b4; }
-                .sensor-unit { font-size: 14px; color: #999; margin-left: 3px; }
-                </style>
-            """, unsafe_allow_html=True)
-
-            # 展示传感器
-            cols = st.columns(4)
-            for idx, sensor in enumerate(env_sensors):
-                s_name = sensor.get("sensorName", "未知")
-                s_unit = sensor.get("unit", "")
-                # 逻辑：根据类型展示不同的“值”
-                st_id = sensor.get('sensorTypeId')
-                if st_id in [2, 5]: # 开关型
-                    s_val = "开启" if sensor.get("switcher") == 1 else "关闭"
-                elif st_id == 1: # 数值型
+            load_local_css("assets/style.css")
+            if selected_type_flag  == 2: 
+                cols = st.columns(3)
+                if st.session_state.get("api_client") is None:
+                    client = IotClient()
+                    login_res = client.login(USERNAME, PASSWORD, API_KEY)
+                    print("🔐 正在登录...")
+                    if login_res.get("flag") != "00":
+                        print("❌ 登录失败:")
+                    else:
+                        token_res = client.get_access_token(USERNAME, PASSWORD)
+                        if token_res.get("flag") != "00":
+                            print("❌ 获取访问令牌失败:")
+                        else:
+                            print("✅ 获取访问令牌成功！可以下发控制指令了！")
+                            st.session_state["api_client"] = client
+                client = st.session_state.get("api_client")
+                for idx, sensor in enumerate(env_sensors):
+                    s_name = sensor.get("sensorName", "未知")
+                    sensor_id = sensor.get("id")
+                    s_time = sensor.get("updateDate", "未知时间")
+                    is_on = str(sensor.get("switcher")) == "1" or str(sensor.get("value")) == "1"
+                    with cols[idx % 3]:
+                        with st.container(border=True):
+                            toggle_key = f"ctrl_toggle_{device_no}_{sensor_id}"
+                            
+                            st.toggle(
+                                label=s_name,  
+                                value=is_on,         # 当前开关滑块的位置
+                                key=toggle_key, # 确保页面 key 唯一
+                                disabled=not is_online, # 如果大棚整体掉线，直接禁用按钮防误触
+                                on_change=handle_toggle_change, 
+                                args=(client,target_device.get("deviceName"), device_no, sensor_id,  s_name,sensor,toggle_key)
+                            )
+                            st.caption(f"📅 ：{s_time}")
+                            st.caption(f"ID：{sensor_id}")
+                            
+            else:
+                # 只读卡片排 4 列
+                cols = st.columns(4)
+                # components.generate_sensor_card_html assumed available
+                for idx, sensor in enumerate(env_sensors):
+                    s_name = sensor.get("sensorName", "未知")
+                    s_unit = sensor.get("unit", "")
+                    s_time = sensor.get("updateDate", "未知时间")
+                    s_id = sensor.get("id", "未知ID")
+                    # 数值型显示
                     s_val = sensor.get("value", "--")
-                else:
-                    s_val = sensor.get("value") or sensor.get("switcher") or "--"
-
-                with cols[idx % 4]:
-                    st.markdown(f"""
-                        <div class="sensor-card">
-                            <div class="sensor-label">{s_name}</div>
-                            <div class="sensor-value">{s_val}<span class="sensor-unit">{s_unit}</span></div>
-                        </div>
-                    """, unsafe_allow_html=True)
+                    val_color_style = "color: #1f77b4;" # 默认蓝色数值颜色
+                    
+                    with cols[idx % 4]:
+                        card_html = generate_sensor_card_html(s_name, val_color_style, s_val, s_unit, s_time, s_id)
+                        st.markdown(card_html, unsafe_allow_html=True)
         else:
-            st.warning(f"该设备下没有【{selected_type_label}】类型的传感器。")
-    
+            mode_desc = "可控制" if selected_type_label == "🎮 控制面板" else "有效监测"
+            st.warning(f"该设备下没有【{selected_type_label}】类型的{mode_desc}设备。")
     st.subheader("📊 跨棚数据对比")
     st.caption("选择传感器，从数据库拉取历史数据绘制趋势对比曲线。")
     valid_metric_names = set()
@@ -304,11 +328,6 @@ if menu == "🌐 设备整体状态":
             start_time = now - timedelta(days=30)
 
         st.caption(f"📅 统计范围：{start_time.strftime('%Y-%m-%d %H:%M:%S')} 至 现在")
-        
-        # start_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
-        # end_str = now.strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 3. 基于精确的名字找到 ID，并从数据库拉取数据
         line_chart_data = []
         with st.spinner("正在从数据库拉取历史时序数据..."):
             # 方式 1 本地数据库查询（推荐，效率更高）
@@ -409,57 +428,51 @@ if menu == "🌐 设备整体状态":
                 fig_curve.update_traces(hovertemplate='%{y:.2f}') 
                 st.plotly_chart(fig_curve, width='stretch')
 
-
 # ----------------- 页面二：单棚孪生与控制 -----------------
-elif menu == "🎮 单棚孪生与控制 (管细节)":
-    st.header("🎮 单棚详情与操控")
+# elif menu == "🎮 单棚孪生与控制 (管细节)":
+#     st.header("🎮 单棚详情与操控")
+#     device_names = [d['deviceName'] for d in st.session_state.device_data]
+#     selected_gh = st.selectbox("目标大棚切换", device_names)
+#     target_device = next(d for d in st.session_state.device_data if d['deviceName'] == selected_gh)
+#     sensors = target_device.get('sensorsList', [])
     
-    device_names = [d['deviceName'] for d in st.session_state.device_data]
-    selected_gh = st.selectbox("目标大棚切换", device_names)
-    target_device = next(d for d in st.session_state.device_data if d['deviceName'] == selected_gh)
-    sensors = target_device.get('sensorsList', [])
+#     col_view, col_ctrl = st.columns([2, 1])
     
-    col_view, col_ctrl = st.columns([2, 1])
-    
-    with col_view:
-        # 【需求7】摄像头
-        st.subheader("📹 视频流与 3D 孪生")
-        st.video("https://www.w3schools.com/html/mov_bbb.mp4") # 占位
-        # 【需求2】实物建模
-        st.info("💡 3D 沙盘区域：此处通过 iframe 嵌入 Three.js 渲染的模型网页。")
+#     with col_view:
+#         # 【需求7】摄像头
+#         st.subheader("📹 视频流与 3D 孪生")
+#         st.video("https://www.w3schools.com/html/mov_bbb.mp4") # 占位
+#         # 【需求2】实物建模
+#         st.info("💡 3D 沙盘区域：此处通过 iframe 嵌入 Three.js 渲染的模型网页。")
         
-        # st.subheader("📟 实时环境数据")
-        # m_col1, m_col2, m_col3 = st.columns(3)
-        # temp, tu = get_sensor_info(sensors, "1号空温")
-        # hum, hu = get_sensor_info(sensors, "1号空湿")
-        # m_col1.metric("空气温度", f"{temp} {tu}")
-        # m_col2.metric("空气湿度", f"{hum} {hu}")
-
-    with col_ctrl:
-        # 【需求5】单设备操控
-        st.subheader("🎛️ 控制面板")
-        st.caption(f"当前在线状态: {'✅' if target_device.get('isLine') else '❌'}")
-        
-        for s in sensors:
-            if s.get("sensorTypeId") == 2: # 控制类设备
-                name = s.get("sensorName")
-                state = (s.get("value") == "1")
-                # Streamlit toggle 按钮
-                toggled = st.toggle(f"🔌 {name}", value=state, key=f"sw_{s.get('id')}")
-                
-                # 【需求11】联动农事绑定 (核心逻辑体现)
-                if toggled and not state: # 刚被打开
-                    if "雾化" in name:
-                        with st.expander("📝 记录：降温加湿工单 (系统检测到雾化开启)", expanded=True):
-                            st.text_input("操作员", "admin")
-                            st.number_input("预计开启时长(分钟)", min_value=1, value=30)
-                            st.button("提交记录", key=f"btn_{s.get('id')}")
-                    elif "卷被" in name or "卷膜" in name:
-                        with st.expander("📝 记录：通风保温工单 (系统检测到卷膜动作)", expanded=True):
-                            st.selectbox("操作意图", ["早晨见光", "夜间保温", "强风收拢"])
-                            st.button("提交记录", key=f"btn_{s.get('id')}")
-
-
+#         # st.subheader("📟 实时环境数据")
+#         # m_col1, m_col2, m_col3 = st.columns(3)
+#         # temp, tu = get_sensor_info(sensors, "1号空温")
+#         # hum, hu = get_sensor_info(sensors, "1号空湿")
+#         # m_col1.metric("空气温度", f"{temp} {tu}")
+#         # m_col2.metric("空气湿度", f"{hum} {hu}")
+#     # TODO 这个也是正常的，但是需要美化修改
+#     with col_ctrl:
+#         # 【需求5】单设备操控
+#         st.subheader("🎛️ 控制面板")
+#         st.caption(f"当前在线状态: {'✅' if target_device.get('isLine') else '❌'}")
+#         for s in sensors:
+#             if s.get("sensorTypeId") == 2: # 控制类设备
+#                 name = s.get("sensorName")
+#                 state = (s.get("value") == "1")
+#                 # Streamlit toggle 按钮
+#                 toggled = st.toggle(f"🔌 {name}", value=state, key=f"sw_{s.get('id')}")
+#                 # 【需求11】联动农事绑定 (核心逻辑体现)
+#                 if toggled and not state: # 刚被打开
+#                     if "雾化" in name:
+#                         with st.expander("📝 记录：降温加湿工单 (系统检测到雾化开启)", expanded=True):
+#                             st.text_input("操作员", "admin")
+#                             st.number_input("预计开启时长(分钟)", min_value=1, value=30)
+#                             st.button("提交记录", key=f"btn_{s.get('id')}")
+#                     elif "卷被" in name or "卷膜" in name:
+#                         with st.expander("📝 记录：通风保温工单 (系统检测到卷膜动作)", expanded=True):
+#                             st.selectbox("操作意图", ["早晨见光", "夜间保温", "强风收拢"])
+#                             st.button("提交记录", key=f"btn_{s.get('id')}")
 
 # ----------------- 页面三：多维数据分析 -----------------
 elif menu == "📈 多维数据分析 (查根因)":
@@ -571,8 +584,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                 st.info(f"💡 **系统智能分析诊断**：\n\n经计算，当前【{x_metric}】与【{y_metric}】的相关系数(r)为 **{r_value:.2f}**，{insight}")
             else:
                 st.info(f"暂无法在各棚中同时匹配到有效的【{x_metric}】和【{y_metric}】数据。")
-
-            
+      
     with tab2:
         # ---------------- 【需求3】前中后区域聚合分析 ----------------
         st.subheader("大棚微气候区域温差分析 (前/中/后)")
@@ -728,21 +740,92 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                 
             # 4. 渲染动态选项
             action = st.selectbox("2. 自动识别并选择统一执行的动作", action_options)
-            
-            # 5. 执行下发
-            if st.button("🚀 下发联控指令", type="primary", width = 'stretch'):
+            if st.button("🚀 下发联控指令", type="primary", use_container_width=True):
                 if not target_ghs:
                     st.warning("请至少选择一个温室！")
                 elif "⚠️" in action:
                     st.error("当前无有效指令可下发。")
                 else:
-                    # 【真实联控逻辑占位】：你需要遍历 target_ghs，调用 IotClient 去依次下发
-                    st.success(f"✅ 指令已成功发送至 {len(target_ghs)} 座大棚的消息队列！")
-                    st.json({
-                        "目标群组": target_ghs, 
-                        "执行指令": action, 
-                        "状态": "队列排队中..."
-                    })
+                    with st.spinner("正在向云端通信矩阵下发指令，请稍候..."):
+                        # ================= 1. 解析动作意图 =================
+                        is_open = "打开" in action
+                        target_switcher_val = 1 if is_open else 0
+                        
+                        # 提取目标设备名称 (去除前缀 "🟢 打开所有 " 或 "🔴 关闭所有 ")
+                        target_sensor_name = action.replace("🟢 打开所有 ", "").replace("🔴 关闭所有 ", "")
+                        
+                        success_count = 0
+                        fail_count = 0
+                        exec_details = [] # 用于记录每台设备的执行结果明细
+                        
+                        # ================= 2. 遍历匹配与真实下发 =================
+                        for d in st.session_state.device_data:
+                            gh_name = d.get('deviceName')
+                            
+                            # 只处理用户勾选的大棚
+                            if gh_name in target_ghs:
+                                device_no = d.get('deviceNo')
+                                
+                                for s in d.get('sensorsList', []):
+                                    s_type = s.get('sensorTypeId')
+                                    
+                                    # 确保是开关型设备
+                                    if s_type in [2, 5, 6]:
+                                        current_name = s.get('sensorName', '').strip()
+                                        
+                                        # 名字精确匹配
+                                        if current_name == target_sensor_name:
+                                            sensor_id = s.get('id')
+                                            
+                                            # --- 调用真实 API 接口 ---
+                                            try:
+                                                # 假设你的 client 实例叫 client (如果在 session_state 中，请用 st.session_state.client)
+                                                ctrl_res = client.switcher_controller(
+                                                    device_no=device_no,
+                                                    sensor_id=sensor_id,
+                                                    switcher=target_switcher_val
+                                                )
+                                                
+                                                # 解析返回结果 (此处假设返回字典且包含 code 或 success 字段，请根据实际接口调整)
+                                                # 如果接口只要不抛异常就算成功，可以直接当成功处理
+                                                if ctrl_res: 
+                                                    exec_details.append({
+                                                        "目标大棚": gh_name, 
+                                                        "控制对象": current_name, 
+                                                        "动作": "开启 🟢" if target_switcher_val else "关闭 🔴", 
+                                                        "状态": "✅ 成功"
+                                                    })
+                                                    success_count += 1
+                                                else:
+                                                    exec_details.append({
+                                                        "目标大棚": gh_name, 
+                                                        "控制对象": current_name, 
+                                                        "动作": "开启" if target_switcher_val else "关闭", 
+                                                        "状态": "❌ 失败(返回值异常)"
+                                                    })
+                                                    fail_count += 1
+                                                    
+                                            except Exception as e:
+                                                exec_details.append({
+                                                    "目标大棚": gh_name, 
+                                                    "控制对象": current_name, 
+                                                    "动作": "开启" if target_switcher_val else "关闭", 
+                                                    "状态": f"⚠️ 错误: {e}"
+                                                })
+                                                fail_count += 1
+
+                        # ================= 3. 结果反馈展示 =================
+                        if success_count > 0 and fail_count == 0:
+                            st.success(f"✅ 联控指令下发完毕！共成功触达 {success_count} 个设备。")
+                        elif fail_count > 0:
+                            st.warning(f"⚠️ 指令下发完成，但存在异常。成功: {success_count}，失败: {fail_count}。请检查设备是否离线。")
+                        else:
+                            st.error("❌ 未找到对应的设备实体，请刷新数据源重试。")
+                        
+                        # 以表格形式展示详细日志，一目了然
+                        if exec_details:
+                            st.dataframe(exec_details, use_container_width=True)
+    
     with col2:
         # ================= 【需求9】电子工单模板 =================
         st.subheader("📑 标准化电子工单")
@@ -787,7 +870,7 @@ elif menu == "⚙️ 策略与预警 (设规则)":
     st.markdown("### 第一步：选择通知接收方式")
     push_mode = st.radio(
         "您希望如何接收报警消息？",
-        ["加入官方公共运维群 (推荐)", "使用我自己的私有钉钉群"],
+        ["加入官方公共运维群 (推荐)", "自定义私有钉钉群"],
         horizontal=True,
         help="公共群只需扫码即可；私有群需要您自行创建机器人并提供 Webhook 地址。"
     )
@@ -799,7 +882,7 @@ elif menu == "⚙️ 策略与预警 (设规则)":
         with col_mid:
             with st.expander("📢 扫码入群即可接收通知", expanded=True):
                 c_qr, c_info = st.columns([1.2, 2])
-                c_qr.image("qrcode.png", caption="官方运维群二维码", width='stretch')
+                c_qr.image("imgs/qrcode.png", caption="官方运维群二维码", width='stretch')
                 c_info.markdown("<br>", unsafe_allow_html=True)
                 c_info.info("""
                 **使用须知：**

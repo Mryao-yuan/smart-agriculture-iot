@@ -1,10 +1,9 @@
 import requests
 import base64
 import json
-import logging
 
 # 关闭警告
-requests.packages.urllib3.disable_warnings()
+# requests.packages.urllib3.disable_warnings()
 
 class IotClient:
     def __init__(self):

@@ -3,16 +3,13 @@ import pymysql
 import json
 from datetime import datetime
 import re
-
 import db_manager
 from config import *
-from iot_client import IotClient  # 请确保导入路径和你的实际代码一致
+from utils.iot_client import IotClient  
 
 
 def run_single_sync():
     print("🚀 [云端调度] 开始执行单次 IoT 数据同步...")
-    
-    # 初始化你的 IoT 客户端
     client = IotClient()
     login_res = client.login(USERNAME, PASSWORD, API_KEY)
     print("🔐 正在登录...")
@@ -110,7 +107,6 @@ def check_alerts_logic(snapshot):
         print(f"⚠️ 报警判定环节出错: {e}")
     finally:
         conn.close()
-
 if __name__ == "__main__":
     db_manager.init_db()
     run_single_sync()

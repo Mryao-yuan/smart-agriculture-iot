@@ -1,0 +1,68 @@
+/* 传感器卡片主体 */
+.sensor-card {
+    background-color: #ffffff;
+    padding: 15px 15px 12px 15px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    border: 1px solid #f0f0f0;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.02);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    cursor: default;
+}
+
+/* 卡片悬浮特效 */
+.sensor-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 5px 10px 20px rgba(0, 0, 0, 0.1);
+    border-color: #1f77b4;
+}
+
+/* 内部文字样式 */
+.sensor-label {
+    font-size: 16px;
+    color: #888;
+    margin-bottom: 5px;
+}
+
+.sensor-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1f77b4;
+}
+
+.sensor-unit {
+    font-size: 14px;
+    color: #999;
+    margin-left: 3px;
+}
+
+/* 底部元数据（时间、ID）块 */
+.sensor-meta-box {
+    margin-top: 12px;
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.meta-row {
+    font-size: 16px;
+    color: #999;
+    display: flex;
+    align-items: center;
+}
+
+.meta-icon {
+    margin-right: 6px;
+    font-size: 14px;
+}
+
+/* ID 一键复制特效 */
+.copy-text {
+    /* font-family: monospace; */
+    color: #888;
+    cursor: pointer;
+    user-select: all;
+    font-size: 16px;
+    -webkit-user-select: all;
+}

@@ -37,7 +37,7 @@ def init_db():
                     max_val DOUBLE,                      -- 上限
                     ding_webhook VARCHAR(500),           -- 钉钉推送地址
                     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    # 🌟 关键：设置大棚+指标的联合唯一索引，保证同一个大棚的同一个指标只有一条规则
+                    # 设置大棚+指标的联合唯一索引，保证同一个大棚的同一个指标只有一条规则
                     UNIQUE KEY uk_gh_metric (target_gh, metric_name)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')

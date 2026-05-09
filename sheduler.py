@@ -1,9 +1,12 @@
 import time
-from iot_client import IotClient
+from utils.iot_client import IotClient
 import streamlit as st
 from database_manager import sync_iot_nested_data
-from utils import data_process,convert_device_data
 from config import *
+
+r'''
+local调度器：每隔10分钟执行一次数据同步，自动刷新token，处理异常情况
+'''
 
 def start_scheduler():
     client = IotClient()
@@ -51,34 +54,25 @@ def start_scheduler():
 
 @st.cache_data(ttl=300)
 def device_info_get():
-    client = IotClient()
-    login_res = client.login(USERNAME, PASSWORD, API_KEY)
-    print("🔐 正在登录...")
-    if login_res.get("flag") != "00":
-        print("❌ 登录失败:")
-        return 
-    token_res = client.get_access_token(USERNAME, PASSWORD)
-    if token_res.get("flag") != "00":
-        print("❌ 获取访问令牌失败:")
-        return
-    print("✅ 获取访问令牌成功！")
+    if "api_client" not in st.session_state:
+        client = IotClient()
+        login_res = client.login(USERNAME, PASSWORD, API_KEY)
+        print("🔐 正在登录...")
+        if login_res.get("flag") != "00":
+            print("❌ 登录失败:")
+            return 
+        token_res = client.get_access_token(USERNAME, PASSWORD)
+        if token_res.get("flag") != "00":
+            print("❌ 获取访问令牌失败:")
+            return
+        print("✅ 获取访问令牌成功！")
+        st.session_state["api_client"] = client
+    else:
+        client = st.session_state["api_client"]
     data_res = client.get_devices_sensor_datas()
     return data_res
-    # try:
-    #         # devices_data,sensors_data = data_process(data_res)
-    #         # print("✅ 设备数据处理完成！")
-    #         # print("设备列表:", devices_data)
-    #         # print("传感器列表:", sensors_data)
-    #         # return devices_data,sensors_data
-    # except Exception as e:
-    #     print("❌ 同步异常:", e)
-        
-        
-        
+ 
 
 
 if __name__ == "__main__":
     start_scheduler()
-
-# 上述运行出现“2026-05-08 00:26:18.519 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using MemoryCacheStorageManager”
-# 什么意思
