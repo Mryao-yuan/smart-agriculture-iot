@@ -109,7 +109,6 @@ def execute_batch_control(client, target_ghs, target_sensor_name, target_switche
                                 if ctrl_res: 
                                     s["switcher"] = str(target_switcher_val)
                                     s["value"] = str(target_switcher_val)
-                                    
                                     exec_details.append({
                                         "大棚": gh_name, "对象": current_name, 
                                         "动作": action_text, "执行结果": "✅ 真实触达并同步状态"

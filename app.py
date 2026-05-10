@@ -33,7 +33,7 @@ json_path="./users.json"
 #     st.stop()
 
 # ==================== 1. 基础配置与全局工具 ====================
-st.set_page_config(page_title="智慧温室 AIoT 平台", layout="wide", page_icon="🌿")
+st.set_page_config(page_title="智慧温室 IoT 平台", layout="wide", page_icon="🌿")
 
 # ==================== 2. Session 状态初始化 ====================
 if 'logged_in' not in st.session_state:
@@ -43,7 +43,7 @@ if 'device_data' not in st.session_state:
 
 # ==================== 3. 侧边栏导航 ====================
 with st.sidebar:
-    st.title("🌿 智慧农业平台")
+    st.title("🌿 智慧温室 IoT 平台")
     # 页面路由菜单
     menu = st.radio("🏠 业务导航", [
         "🌐 设备整体状态", 
@@ -273,8 +273,7 @@ if menu == "🌐 设备整体状态":
                                 args=(client,target_device.get("deviceName"), device_no, sensor_id,  s_name,sensor,toggle_key)
                             )
                             st.caption(f"📅 ：{s_time}")
-                            st.caption(f"ID：{sensor_id}")
-                            
+                            st.caption(f"ID：{sensor_id}")         
             else:
                 # 只读卡片排 4 列
                 cols = st.columns(4)
@@ -604,7 +603,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                                     line=dict(color="#ff7f0e", width=2), # 换成醒目的亮橙色，并稍微加粗
                                     selector=dict(mode="lines") # 选择器：只对线生效
                                 )
-                                st.plotly_chart(fig_scatter, use_container_width=True)
+                                st.plotly_chart(fig_scatter, width='stretch')
                                 r_value = df_corr[x_metric].corr(df_corr[y_metric], method='spearman') # 计算 Spearman 相关系数
                                 if pd.isna(r_value):
                                     st.info("💡 **系统智能分析**：\n\n数据点方差不足（数值在此期间几乎无变化），无法计算有效相关性。")
@@ -624,7 +623,7 @@ elif menu == "📈 多维数据分析 (查根因)":
                             # corr_matrix = df_corr[[x_metric, y_metric]].corr(method='spearman')
                             # fig_heatmap = px.imshow(corr_matrix, text_auto=True, \
                             #     color_continuous_scale='RdBu', title=f"{str_start} 至 {str_end} 期间【{selected_gh}】下 {x_metric} 和 {y_metric} 相关性矩阵")
-                            # st.plotly_chart(fig_heatmap, use_container_width=True)
+                            # st.plotly_chart(fig_heatmap, width='stretch')
 
                     else:
                         st.info(f"获取的历史数据中未包含【{x_metric}】或【{y_metric}】的有效交叉数据。")
@@ -785,7 +784,7 @@ elif menu == "📈 多维数据分析 (查根因)":
 
                     st.plotly_chart(
                         fig_agg,
-                        use_container_width=True
+                        width='stretch'
                     ) 
     with tab3:
         # ---------------- 【需求3】自定义时段与历史数据导出 ----------------
@@ -918,7 +917,7 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                 action_options = ["⚠️ 选中的大棚暂无可控设备"]
 
             action = st.selectbox("2. 自动识别并选择统一执行的动作", action_options)
-            if st.button("🚀 下发联控指令", type="primary", use_container_width=True):
+            if st.button("🚀 下发联控指令", type="primary", width='stretch'):
                 if not target_ghs:
                     st.warning("请至少选择一个温室！")
                 elif "⚠️" in action:
@@ -968,45 +967,152 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                                 st.error("❌ 未匹配到可控的物理设备实体。")
                             
                             if details_log:
-                                st.dataframe(pd.DataFrame(details_log), use_container_width=True)
+                                st.dataframe(pd.DataFrame(details_log), width='stretch')
     with col2:
-        # ================= 【需求9】电子工单模板 =================
+        db_manager.init_db()
+        conn = db_manager.get_connection()
+        active_batches_data = [] # 存储原始行数据
+        active_batch_labels = [] # 存储显示用的字符串
+        
+        try:
+            with conn.cursor() as cursor:
+                # 查询所有正在进行中的种植批次
+                cursor.execute("""
+                    SELECT batch_id, gh_name, crop_name, variety, start_time, expected_harvest, current_stage 
+                    FROM batches WHERE status = 1
+                """)
+                active_batches_data = cursor.fetchall()
+                active_batch_labels = [f"ID:{b['batch_id']} | {b['gh_name']} - {b['crop_name']}({b['variety']})" for b in active_batches_data]
+        finally:
+            conn.close()
+
+        # ================= 【需求9】电子工单模板：数据归档 =================
         st.subheader("📑 标准化电子工单")
-        with st.container(border=True):
-            task_type = st.selectbox("作业类型 (SOP)", ["🌱 播种与定植", "💧 智能灌溉", "💊 水肥一体化施肥", "✂️ 打叶与采收"])
-            operator = st.text_area("操作负责人", placeholder="例如：张农技师")
-            st.text_area("作业内容标准与指导记录", placeholder="例如：今日执行生菜A区定植，营养液EC目标调至1.8...")
-            if st.button("💾 生成并归档工单"):
-                st.toast("工单已归档至数据库！")
+        with st.form("sop_form", clear_on_submit=True):
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            if not active_batch_labels:
+                st.warning("⚠️ 暂无进行中的批次，请先在数据库中创建批次信息。")
+                selected_batch_label = col1.selectbox("关联批次", ["无可用批次"], disabled=True)
+            else:
+                selected_batch_label = col1.selectbox("关联批次", active_batch_labels)
                 
-            # TODO 此时的数据需要和数据库联动进行保存，并且在后续的工单管理模块中可以查询和追踪。
+            task_type = col2.selectbox("作业类型 (SOP)", ["🌱 播种与定植", "💧 智能灌溉", "💊 水肥一体化施肥", "✂️ 打叶与采收", "🌀 强制通风"])
+            duration = col3.number_input("耗时(分钟)", min_value=1, value=30)
+            
+            operator = st.text_input("操作负责人", placeholder="输入执行人姓名")
+            details = st.text_area("作业明细内容", placeholder="例如：设定EC值1.5，开启侧窗通风30%...")
+            
+            submitted = st.form_submit_button("💾 生成并归档工单", type="primary", use_container_width=True)
+            
+            if submitted and active_batch_labels:
+                # 解析选中的 batch_id 和 gh_name
+                selected_batch = next(b for b in active_batches_data if f"ID:{b['batch_id']}" in selected_batch_label)
+                
+                conn = db_manager.get_connection()
+                try:
+                    with conn.cursor() as cursor:
+                        sql = """
+                            INSERT INTO work_orders (batch_id, gh_name, task_type, operator, content, duration_mins) 
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """
+                        cursor.execute(sql, (
+                            selected_batch['batch_id'], 
+                            selected_batch['gh_name'], 
+                            task_type, 
+                            operator, 
+                            details, 
+                            duration
+                        ))
+                        conn.commit()
+                    st.success(f"✅ 【{task_type}】工单已成功存入 TiDB 数据库，并关联至批次 {selected_batch['batch_id']}！")
+                except Exception as e:
+                    st.error(f"工单存入失败: {e}")
+                finally:
+                    conn.close()
+
+        st.divider()
+
+        # ================= 【需求10】批次管理与生长曲线：真实数据关联 =================
+        st.subheader("📦 农作物批次与生长曲线关联")
+        st.caption("系统自动根据批次的【定植时间】截取历史环境数据，并进行生长阶段标注。")
         
-    st.divider()
-    
-    # ================= 【需求10】批次管理与生长节点 =================
-    st.subheader("📦 农作物批次与生长曲线关联")
-    st.caption("将环境数据直接绑定到具体的种植批次上。")
-    
-    c_b1, c_b2 = st.columns([1, 3])
-    with c_b1:
-        batch_no = st.selectbox("选择追踪批次", ["🍅 番茄批次-202604", "🥬 生菜批次-202605"])
-        st.metric("批次运行时长", "34 天")
-        st.metric("预计采收倒计时", "12 天")
-        
-    with c_b2:
-        # 使用进度条和步进图模拟生长节点
-        st.markdown("#### 当前阶段：开花坐果期 (阶段 3/4)")
-        st.progress(75, text="自动环境策略：已根据生长期自动下调夜间温度目标以促进干物质积累。")
-        
-        # 日均温变化曲线 由数据集中读取处理
-        dates = pd.date_range(start="2026-04-01", periods=34).strftime("%m-%d")
-        import numpy as np
-        temps = 20 + np.random.randn(34).cumsum() # 生成平滑的随机曲线
-        
-        fig_batch = px.line(x=dates, y=temps, title=f"{batch_no} 历史日均温曲线", labels={"x": "日期", "y": "日均温 (℃)"})
-        fig_batch.update_layout(height=250, margin={"t":30, "b":0})
-        st.plotly_chart(fig_batch, width = 'stretch')
-        
+        if not active_batch_labels:
+            st.info("尚未选择任何种植批次。")
+        else:
+            c_b1, c_b2 = st.columns([1, 3])
+            
+            with c_b1:
+                selected_track_label = st.selectbox("选择要追踪的批次", active_batch_labels, key="track_batch")
+                batch = next(b for b in active_batches_data if f"ID:{b['batch_id']}" in selected_track_label)
+                
+                # 自动计算批次指标
+                runtime_days = (datetime.now() - batch['start_time']).days
+                st.metric("批次运行时长", f"{runtime_days} 天")
+                
+                if batch['expected_harvest']:
+                    days_left = (batch['expected_harvest'] - datetime.now()).days
+                    st.metric("预计采收倒计时", f"{days_left} 天", delta_color="inverse")
+                
+                st.write(f"**当前阶段**: `{batch['current_stage'] or '未标注'}`")
+
+            with c_b2:
+                # 🌟 核心逻辑：从数据库拉取该批次在该大棚的真实环境曲线
+                with st.spinner("正在回溯该批次的历史生长环境数据..."):
+                    conn = db_manager.get_connection()
+                    batch_history = []
+                    try:
+                        with conn.cursor() as cursor:
+                            # 查找该大棚下名为“温度”或“空温”的传感器 ID
+                            cursor.execute("""
+                                SELECT s.sensor_id FROM sensors s 
+                                JOIN devices d ON s.device_id = d.device_id 
+                                WHERE d.gh_name = %s AND (s.sensor_name LIKE '%%温度%%' OR s.sensor_name LIKE '%%空温%%')
+                                LIMIT 1
+                            """, (batch['gh_name'],))
+                            res_s = cursor.fetchone()
+                            
+                            if res_s:
+                                sensor_id = res_s['sensor_id']
+                                # 截取从 start_time 至今的该传感器所有历史值
+                                cursor.execute("""
+                                    SELECT add_time, value FROM sensor_history 
+                                    WHERE sensor_id = %s AND add_time >= %s 
+                                    ORDER BY add_time ASC
+                                """, (sensor_id, batch['start_time']))
+                                batch_history = cursor.fetchall()
+                    finally:
+                        conn.close()
+
+                if not batch_history:
+                    st.warning(f"⚠️ 在【{batch['gh_name']}】中未找到该批次对应的历史温度数据。")
+                else:
+                    df_b = pd.DataFrame(batch_history)
+                    df_b['value'] = pd.to_numeric(df_b['value'], errors='coerce')
+                    df_b['add_time'] = pd.to_datetime(df_b['add_time'])
+                    
+                    # 绘制真实曲线
+                    fig_batch = px.line(df_b, x='add_time', y='value', 
+                                    title=f"批次 {batch['batch_id']} 环境回溯 ({batch['crop_name']})",
+                                    labels={"add_time": "生长日期", "value": "空气温度 (℃)"})
+                    
+                    # 🌟 自动化生长阶段标注 (以生菜为例，天数可根据 crop_name 动态调整)
+                    start_date = batch['start_time']
+                    if "生菜" in batch['crop_name']:
+                        # 缓苗期: 前7天
+                        fig_batch.add_vrect(x0=start_date, x1=start_date + timedelta(days=7), 
+                                        fillcolor="green", opacity=0.1, line_width=0, annotation_text="🌱 缓苗期")
+                        # 莲座期: 7-25天
+                        fig_batch.add_vrect(x0=start_date + timedelta(days=7), x1=start_date + timedelta(days=25), 
+                                        fillcolor="yellow", opacity=0.1, line_width=0, annotation_text="🌿 莲座期")
+                        # 结球期: 25天以后
+                        if runtime_days > 25:
+                            fig_batch.add_vrect(x0=start_date + timedelta(days=25), x1=datetime.now(), 
+                                            fillcolor="orange", opacity=0.1, line_width=0, annotation_text="🥬 结球期")
+
+                    fig_batch.update_layout(height=350, margin={"t":40, "b":0})
+                    st.plotly_chart(fig_batch, use_container_width=True)
+            
 # ----------------- 页面五：策略与预警 -----------------
 elif menu == "⚙️ 策略与预警 (设规则)":
     st.header("⚙️ 自动化策略与报警配置")
@@ -1209,3 +1315,60 @@ elif menu == "⚙️ 策略与预警 (设规则)":
 
                 except Exception as e:
                     st.error(f"⚠️ 保存失败: {e}")
+                    
+
+
+
+# 10. 批次管理：关联环境与生长曲线自动标注
+# # 假设这是从你的 sensor_history 表中，提取该“批次”从种下到现在的真实日均温
+# # select ... where add_time >= '批次开始时间'
+# df_batch = pd.DataFrame({
+#     '日期': pd.date_range(start='2026-03-01', periods=40),
+#     '温度': [20 + (i*0.1) for i in range(40)] # 模拟温度略微上升
+# })
+
+# fig = px.line(df_batch, x='日期', y='温度', title="生菜批次-202603 生长环境曲线 (自动节点标注)")
+
+# # 🌟 核心魔法：根据天数自动打上生长周期的底色标注
+# fig.add_vrect(x0="2026-03-01", x1="2026-03-10", fillcolor="green", opacity=0.1, line_width=0, annotation_text="🌱 缓苗期")
+# fig.add_vrect(x0="2026-03-10", x1="2026-03-30", fillcolor="yellow", opacity=0.1, line_width=0, annotation_text="🌿 莲座期")
+# fig.add_vrect(x0="2026-03-30", x1="2026-04-10", fillcolor="orange", opacity=0.1, line_width=0, annotation_text="🥬 结球期")
+
+# st.plotly_chart(fig, use_container_width=True)
+
+
+                    
+# 11. 远程控制与农事表单绑定（自动弹出）                   
+# import streamlit as st
+
+# # 1. 定义一个针对特定动作的弹窗表单 (例如通风表单)
+# @st.dialog("📝 自动农事记录：通风换气")
+# def ventilation_form(gh_name):
+#     st.info(f"系统检测到您刚刚操作了【{gh_name}】的卷膜机。为规范管理，请补充通风记录。")
+#     reason = st.selectbox("通风原因", ["常规换气", "高温降温", "降低湿度", "补充二氧化碳"])
+#     target_time = st.number_input("预计通风时长 (分钟)", min_value=10, value=30)
+    
+#     if st.button("提交记录"):
+#         # 执行插入 work_orders 表的操作
+#         st.session_state.show_form = False # 关闭弹窗触发器
+#         st.rerun() # 刷新页面关闭弹窗
+
+# # 2. 在你原来的控制代码逻辑中，加入触发机制
+# target_sensor_name = "1号卷膜机"
+# action = "开启"
+
+# if st.button("开启卷膜机"):
+#     # 假设这里是你调用 API 下发成功的代码...
+#     ctrl_success = True 
+    
+#     if ctrl_success:
+#         st.success("✅ 指令下发成功！")
+        
+#         # 🌟 核心：识别操作的是什么设备，触发对应的弹窗
+#         if "卷膜" in target_sensor_name and "开" in action:
+#             # 激活并显示通风表单弹窗
+#             ventilation_form(selected_gh)
+            
+#         elif "雾化" in target_sensor_name or "水泵" in target_sensor_name:
+#             # 可以写一个 misting_form(selected_gh) 弹窗
+#             st.toast("提示：请记录灌溉/降温数据", icon="💧")

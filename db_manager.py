@@ -46,10 +46,12 @@ def init_db():
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS work_orders (
                     id INT AUTO_INCREMENT PRIMARY KEY,
+                    batch_id INT,                     
                     gh_name VARCHAR(100),
                     task_type VARCHAR(50),
                     operator VARCHAR(50),
                     content TEXT,
+                    duration_mins INT,               
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')
@@ -109,7 +111,31 @@ def init_db():
                     add_time DATETIME,
                     UNIQUE KEY uk_sensor_time (sensor_id, add_time)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            ''')        
+            ''')  
+            # 6. 种植批次表 (用于生长曲线和积温分析)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS batches (
+                    batch_id INT AUTO_INCREMENT PRIMARY KEY,
+                    gh_name VARCHAR(100) NOT NULL,    
+                    crop_name VARCHAR(100) NOT NULL,  
+                    variety VARCHAR(100),             
+                    start_time DATETIME NOT NULL,     
+                    expected_harvest DATETIME,        
+                    current_stage VARCHAR(50),        
+                    status TINYINT DEFAULT 1          
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ''')
+
+            # 7. 摄像头配置表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cameras (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    gh_name VARCHAR(100) NOT NULL,
+                    stream_url VARCHAR(500) NOT NULL, 
+                    camera_name VARCHAR(100)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ''') 
+                 
         conn.commit()
         print("✅ TiDB 云端数据库初始化成功，所有表结构已同步")
     except Exception as e:
