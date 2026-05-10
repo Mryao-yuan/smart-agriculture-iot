@@ -15,10 +15,10 @@ import db_manager
 
 from utils.weather import get_weather_amap,init_weather_alert_config,get_weather_alert
 from utils.login import check_password
-from utils.text_operate import extract_gh_num,get_sorted_devices
+from utils.text_operate import extract_gh_num,get_sorted_devices,parse_zone,process_history_records
 from utils.alter import user_webhook_check
 from utils.style import load_local_css,generate_sensor_card_html
-from utils.controllers import handle_toggle_change
+from utils.controllers import handle_toggle_change, execute_batch_control
 from utils.iot_client import IotClient
 from datetime import datetime
 
@@ -507,18 +507,17 @@ elif menu == "📈 多维数据分析 (查根因)":
         ["最近24小时", "最近一周", "最近一月"], 
         index=1
     )
-    # 计算起始时间
+
     now = datetime.now()
     days_map = {"最近24小时": 1, "最近一周": 7, "最近一月": 30}
     start_time = now - timedelta(days=days_map[analysis_range])
-    
     if not metric_opts:
         st.warning("⚠️ 当前没有任何有效的环境传感器数据可供分析。")
         st.stop()
         
     # ================= 2. 渲染三大分析模块 =================
     tab1, tab2, tab3 = st.tabs(["📊 传感器参数相关性分析", "📉 前中后区域聚合", "📥 历史数据导出"])
-    with tab1:
+    with tab1: # TODO 加单位
         # ---------------- 【需求3】参数相关性分析 ----------------
         st.subheader("参数相关性分析")
         st.markdown("通过对比各棚的传感器数据，找到两个传感器数据之间的相关性。")
@@ -533,7 +532,7 @@ elif menu == "📈 多维数据分析 (查根因)":
         if target_device :
             for s in target_device["sensorsList"]:
                 s_name = s.get("sensorName")
-                if s.get("sensorTypeId") != 1 and s.get("value") in ['0', '0.0']:
+                if s.get("sensorTypeId") != 1 or s.get("value") in ['0', '0.0']:
                     continue
                 dynamic_metric_opts.append(s_name)    
             dynamic_metric_opts = sorted(list(set(dynamic_metric_opts)))
@@ -570,183 +569,321 @@ elif menu == "📈 多维数据分析 (查根因)":
                 if not history_records:
                     st.info(f"暂无【{selected_gh}】在此时段内的历史数据。")
                 else:
-                    df_raw = pd.DataFrame(history_records)
-                    df_raw['sensor_value'] = pd.to_numeric(df_raw['sensor_value'], errors='coerce')
-                    # 时间跨度真实性校验,确保 record_time 是 Pandas 的时间格式
-                    df_raw['record_time'] = pd.to_datetime(df_raw['record_time'])
-                    df_raw['record_time'] = df_raw['record_time'].dt.round('10min') # 时间对齐 (降采样)
-                    
-                    actual_start = df_raw['record_time'].min()
-                    actual_end = df_raw['record_time'].max()
-                    if (actual_start - start_time).total_seconds() > 7200: # 2 h
-                        str_start = actual_start.strftime('%Y-%m-%d %H:%M')
-                        str_end = actual_end.strftime('%Y-%m-%d %H:%M')
-                        st.info(
-                            f"💡 **数据区间动态调整**：您选择了分析【{analysis_range}】，"
-                            f"但该大棚可追溯的最早记录始于 {str_start}。\n\n"
-                            f"为保证分析结果真实有效，本次相关性分析的实际数据区间为：**{str_start} 至 {str_end}**。"
-                        )
-                    df_pivot = df_raw.pivot_table(
-                        index='record_time', 
-                        columns='sensor_name', 
-                        values='sensor_value',
-                        aggfunc='mean'
-                    ).reset_index()
-                    if x_metric in df_pivot.columns and y_metric in df_pivot.columns:
-                        df_corr = df_pivot[['record_time', x_metric, y_metric]].dropna()
-                        df_corr.rename(columns={"record_time": "采集时间"}, inplace=True)
-                        df_corr['采集时间'] = pd.to_datetime(df_corr['采集时间']).dt.strftime('%Y-%m-%d %H:%M')
-                        
-                        if len(df_corr) < 3: 
-                            st.warning(f"⚠️ 当前时间跨度内，有效的对比数据过少（仅 {len(df_corr)} 条），无法进行回归分析。")
-                        else:
-                            fig_scatter = px.scatter(
-                                df_corr, 
-                                x=x_metric, 
-                                y=y_metric, 
-                                hover_name="采集时间", 
-                                trendline="lowess", 
-                                color_discrete_sequence=["#1f77b4"],
-                                title=f"【{selected_gh}】历史相关性：{x_metric} vs {y_metric}"
-                            )
-                            fig_scatter.update_traces(
-                                marker=dict(size=10, opacity=0.6), 
-                                selector=dict(mode="markers") # 选择器：只对点生效
-                            )
-                            fig_scatter.update_traces(
-                                line=dict(color="#ff7f0e", width=2), # 换成醒目的亮橙色，并稍微加粗
-                                selector=dict(mode="lines") # 选择器：只对线生效
-                            )
-                            st.plotly_chart(fig_scatter, use_container_width=True)
-                            r_value = df_corr[x_metric].corr(df_corr[y_metric], method='spearman') # 计算 Spearman 相关系数
-                            if pd.isna(r_value):
-                                st.info("💡 **系统智能分析**：\n\n数据点方差不足（数值在此期间几乎无变化），无法计算有效相关性。")
+                    df_raw, actual_start, actual_end = process_history_records(
+    history_records, start_time, analysis_range
+)
+                    if not df_raw.empty:
+                        df_pivot = df_raw.pivot_table(
+                            index='record_time', 
+                            columns='sensor_name', 
+                            values='sensor_value',
+                            aggfunc='mean'
+                        ).reset_index()
+                        if x_metric in df_pivot.columns and y_metric in df_pivot.columns:
+                            df_corr = df_pivot[['record_time', x_metric, y_metric]].dropna()
+                            df_corr.rename(columns={"record_time": "采集时间"}, inplace=True)
+                            df_corr['采集时间'] = pd.to_datetime(df_corr['采集时间']).dt.strftime('%Y-%m-%d %H:%M')
+                            
+                            if len(df_corr) < 3: 
+                                st.warning(f"⚠️ 当前时间跨度内，有效的对比数据过少（仅 {len(df_corr)} 条），无法进行回归分析。")
                             else:
-                                if r_value > 0.7:
-                                    insight = "呈现 **强正相关** 📈。"
-                                elif r_value > 0.3:
-                                    insight = "呈现 **中弱度正相关** ↗️。两者存在一定的**同向变化趋势**，但步调并非完全一致，可能还受到其他环境变量的交织影响。"
-                                elif r_value > -0.3:
-                                    insight = "呈现 **无明显趋势关联** ➖。说明这两个参数之间在此期间既没有明显的跟随变化，也没有明显的反向制约关系。"
-                                elif r_value > -0.7:
-                                    insight = "呈现 **中度负相关** ↘️。两者存在一定的**反向制约趋势**，一个处于高位时，另一个往往处于低位。"
+                                fig_scatter = px.scatter(
+                                    df_corr, 
+                                    x=x_metric, 
+                                    y=y_metric, 
+                                    hover_name="采集时间", 
+                                    trendline="lowess", 
+                                    color_discrete_sequence=["#1f77b4"],
+                                    title=f"【{selected_gh}】历史相关性：{x_metric} vs {y_metric}"
+                                )
+                                fig_scatter.update_traces(
+                                    marker=dict(size=10, opacity=0.6), 
+                                    selector=dict(mode="markers") # 选择器：只对点生效
+                                )
+                                fig_scatter.update_traces(
+                                    line=dict(color="#ff7f0e", width=2), # 换成醒目的亮橙色，并稍微加粗
+                                    selector=dict(mode="lines") # 选择器：只对线生效
+                                )
+                                st.plotly_chart(fig_scatter, use_container_width=True)
+                                r_value = df_corr[x_metric].corr(df_corr[y_metric], method='spearman') # 计算 Spearman 相关系数
+                                if pd.isna(r_value):
+                                    st.info("💡 **系统智能分析**：\n\n数据点方差不足（数值在此期间几乎无变化），无法计算有效相关性。")
                                 else:
-                                    insight = "呈现 **强负相关** 📉。两者之间存在极强的**此消彼长**效应。"
-                                st.info(f"💡 **系统智能分析 (Spearman 秩相关)**：\n\n经计算，本周期内 {x_metric} 与 {y_metric} 的相关系数(rho)为 **{r_value:.2f}**，{insight}")
+                                    if r_value > 0.7:
+                                        insight = "呈现 **强正相关** 📈。"
+                                    elif r_value > 0.3:
+                                        insight = "呈现 **中弱度正相关** ↗️。两者存在一定的**同向变化趋势**，但步调并非完全一致，可能还受到其他环境变量的交织影响。"
+                                    elif r_value > -0.3:
+                                        insight = "呈现 **无明显趋势关联** ➖。说明这两个参数之间在此期间既没有明显的跟随变化，也没有明显的反向制约关系。"
+                                    elif r_value > -0.7:
+                                        insight = "呈现 **中度负相关** ↘️。两者存在一定的**反向制约趋势**，一个处于高位时，另一个往往处于低位。"
+                                    else:
+                                        insight = "呈现 **强负相关** 📉。两者之间存在极强的**此消彼长**效应。"
+                                    st.info(f"💡 **系统智能分析 (Spearman 秩相关)**：\n\n经计算，本周期内 {x_metric} 与 {y_metric} 的相关系数(rho)为 **{r_value:.2f}**，{insight}")
+                            # heat map 两两分析其实和先去指标一样
+                            # corr_matrix = df_corr[[x_metric, y_metric]].corr(method='spearman')
+                            # fig_heatmap = px.imshow(corr_matrix, text_auto=True, \
+                            #     color_continuous_scale='RdBu', title=f"{str_start} 至 {str_end} 期间【{selected_gh}】下 {x_metric} 和 {y_metric} 相关性矩阵")
+                            # st.plotly_chart(fig_heatmap, use_container_width=True)
+
                     else:
                         st.info(f"获取的历史数据中未包含【{x_metric}】或【{y_metric}】的有效交叉数据。")
         else:
             c1.warning(f"⚠️ 【{selected_gh}】下暂无连续型环境传感器数据") 
     with tab2:
-        # ---------------- 【需求3】前中后区域聚合分析 ----------------
-        st.subheader("大棚微气候区域温差分析 (前/中/后)")
-        st.markdown("由于通风和光照差异，大棚两端与中间通常存在微气候差异。此图表进行区域对比。")
-        
-        # 让用户选择基础指标（比如“空温”或“土壤湿度”）
-        agg_base = st.selectbox("请选择要聚合的指标基类", base_metric_opts)
-        
-        agg_data = []
-        for d in st.session_state.device_data:
-            gh = d.get("deviceName")
-            sensors = d.get('sensorsList', [])
-            # 动态组合寻找前中后的名字（支持 "号" 和 "组"）
-            front_val = None
-            mid_val = None
-            back_val = None
-            
-            for s in sensors:
-                name = s.get("sensorName", "")
-                val_str = str(s.get("value", "0"))
-                if val_str in ['0', '0.0']: continue 
-                try:
-                    if agg_base in name:
-                        if "1号" in name or "1组" in name: front_val = float(val_str)
-                        if "2号" in name or "2组" in name: mid_val = float(val_str)
-                        if "3号" in name or "3组" in name: back_val = float(val_str)
-                except:
-                    pass
-            
-            # 存入聚合列表
-            if front_val is not None: agg_data.append({"温室": gh, "区域": "前区(1号/1组)", "数值": front_val})
-            if mid_val is not None: agg_data.append({"温室": gh, "区域": "中区(2号/2组)", "数值": mid_val})
-            if back_val is not None: agg_data.append({"温室": gh, "区域": "后区(3号/3组)", "数值": back_val})
-            
-        df_agg = pd.DataFrame(agg_data)
-        if not df_agg.empty:
-            # 绘制分组柱状图
-            fig_agg = px.bar(
-                df_agg, x="温室", y="数值", color="区域", 
-                barmode="group", text_auto=True,
-                title=f"各棚【{agg_base}】前中后区域分布"
-            )
-            fig_agg.update_layout(yaxis_title=f"{agg_base} 数值")
-            st.plotly_chart(fig_agg, width = 'stretch')
-        else:
-            st.info(f"未能在设备中检测到区分前中后的【{agg_base}】数据。")
-            
+        # ---------------- 【需求3】前中后区域聚合分析 (全周期 + 多棚对比) ----------------
+        st.subheader("全局大棚微气候区域传感器数据分析 (前/中/后)")
+        st.markdown(
+            "基于左侧选择的历史周期，计算各棚前、中、后区域的历史平均数值，横向对比全局大棚微气候状况。"
+        )
+        agg_base = st.selectbox(
+            "请选择要聚合的指标基类",
+            base_metric_opts,
+            key="tab2_agg_base"
+        )
+        with st.spinner(
+            f"正在拉取全局大棚自 {start_time.strftime('%Y-%m-%d %H:%M')} 以来的历史数据..."
+        ):
+            db_manager.init_db()
+            conn = db_manager.get_connection()
+            history_records = []
+            try:    
+                with conn.cursor() as cursor:
+                    sql = """
+                        SELECT
+                            d.gh_name,
+                            s.sensor_name,
+                            sh.value AS sensor_value,
+                            sh.add_time AS record_time  
+                        FROM sensor_history sh  
+                        JOIN sensors s
+                            ON sh.sensor_id = s.sensor_id   
+                        JOIN devices d
+                            ON s.device_id = d.device_id    
+                        WHERE sh.add_time >= %s
+                    """ 
+                    cursor.execute(sql, (start_time,))  
+                    history_records = cursor.fetchall() 
+            except Exception as e:  
+                st.error(f"数据库查询失败: {e}")    
+            finally:    
+                conn.close()
+            if not history_records: 
+                st.info(f"暂无此时段内的【{agg_base}】历史数据。")  
+            else:
+
+                df_raw = pd.DataFrame(history_records)
+                df_raw['sensor_value'] = pd.to_numeric(
+                    df_raw['sensor_value'],
+                    errors='coerce'
+                )
+
+                df_raw['record_time'] = pd.to_datetime(
+                    df_raw['record_time']
+                )
+
+                df_raw['record_time'] = df_raw[
+                    'record_time'
+                ].dt.round('10min')
+
+                df_raw = df_raw[
+                    df_raw['sensor_name'].str.contains(
+                        agg_base,
+                        na=False
+                    )
+                ]
+
+                df_raw['区域'] = df_raw[
+                    'sensor_name'
+                ].apply(parse_zone)
+
+                df_clean = df_raw.dropna(
+                    subset=['区域', 'sensor_value']
+                )
+
+                if df_clean.empty:
+                    st.warning(
+                        "数据清洗后无有效区域数据可供绘图。"
+                    )
+
+                else:
+                    actual_start = df_clean['record_time'].min()
+                    actual_end = df_clean['record_time'].max()
+                    if (
+                        actual_start - start_time
+                    ).total_seconds() > 7200:
+                        str_start = actual_start.strftime(
+                            '%Y-%m-%d %H:%M'
+                        )
+                        str_end = actual_end.strftime(
+                            '%Y-%m-%d %H:%M'
+                        )
+                        st.info(
+                            f"💡 数据区间动态调整："
+                            f"实际数据区间为 "
+                            f"{str_start} 至 {str_end}"
+                        )
+                    df_agg = (
+                        df_clean
+                        .groupby(
+                            ['gh_name', '区域']
+                        )['sensor_value']
+                        .mean()
+                        .reset_index()
+                    )
+                    df_agg.rename(
+                        columns={
+                            'gh_name': '温室',
+                            'sensor_value': '数值'
+                        },
+                        inplace=True
+                    )
+
+                    zone_order = [
+                        "前区(1号/1组)",
+                        "中区(2号/2组)",
+                        "后区(3号/3组)"
+                    ]
+
+                    df_agg['区域'] = pd.Categorical(
+                        df_agg['区域'],
+                        categories=zone_order,
+                        ordered=True
+                    )
+                    df_agg = df_agg.sort_values(
+                        ['温室', '区域']
+                    )
+                    fig_agg = px.bar(
+
+                        df_agg,
+
+                        x="温室",
+
+                        y="数值",
+
+                        color="区域",
+
+                        barmode="group",
+
+                        text_auto='.2f',
+                        title=f"各棚【{agg_base}】前中后区域分布 (历史均值)",
+                        color_discrete_sequence=[
+                            "#636EFA",
+                            "#00CC96",
+                            "#EF553B"
+                        ]
+                    )
+                    # 动态Y轴
+                    y_min = df_agg['数值'].min() * 0.95
+
+                    fig_agg.update_layout(
+                        yaxis_title=f"平均 {agg_base} 数值",
+                        yaxis=dict(
+                            range=[y_min, None]
+                        )
+                    )
+
+                    st.plotly_chart(
+                        fig_agg,
+                        use_container_width=True
+                    ) 
     with tab3:
         # ---------------- 【需求3】自定义时段与历史数据导出 ----------------
         st.subheader("自定义时段与历史数据导出")
-        st.caption("从 SQLite 数据库提取精准的历史时序快照，一键导出为 Excel 可读格式。")
-        
-        col_ex1, col_ex2, col_ex3 = st.columns(3)
-        # 1. 选大棚
-        device_names = [d['deviceName'] for d in st.session_state.device_data]
-        export_gh = col_ex1.selectbox("步骤一：选择大棚", device_names)
-        
-        # 2. 选具体的传感器 (联动上方的动态选项)
-        export_sensor_name = col_ex2.selectbox("步骤二：选择要导出的指标", metric_opts)
-        
-        # 3. 自定义时间段
-        date_range = col_ex3.date_input("步骤三：选择时间范围", 
-                                        value=(datetime.now() - timedelta(days=1), datetime.now()))
-        
-        if len(date_range) == 2:
-            start_date, end_date = date_range
-            # 格式化为数据库所需的字符串时间格式
-            start_str = start_date.strftime("%Y-%m-%d 00:00:00")
-            end_str = end_date.strftime("%Y-%m-%d 23:59:59")
-            
-            if st.button("🔍 查询历史数据并准备导出", type="primary"):
-                with st.spinner("正在从本地数据库检索..."):
+        st.caption("从数据库提取历史时序数据，支持按大棚/传感器/组合导出，可一键下载 CSV。")
+
+        col_ex1, col_ex2, col_ex3, col_ex4 = st.columns([2, 2, 3, 1])
+
+        # 1️⃣ 选择大棚（可选 "所有大棚"）
+        device_names = ["所有大棚"] + [d['deviceName'] for d in st.session_state.device_data]
+        export_gh = col_ex1.selectbox("选择大棚", device_names)
+
+        # 2️⃣ 选择传感器（可选 "所有传感器"）
+        sensor_names = ["所有传感器"] + metric_opts
+        export_sensor_name = col_ex2.selectbox("选择传感器", sensor_names)
+
+        # 3️⃣ 自定义时间段
+        date_range = col_ex3.date_input(
+            "选择时间范围", 
+            value=(datetime.now() - timedelta(days=1), datetime.now())
+        )
+        # 4️⃣ 导出按钮
+        export_btn = col_ex4.button("🔍 查询并导出", type="primary")
+        if export_btn:
+            if len(date_range) != 2:
+                st.warning("请选择完整的起止日期。")
+            else:
+                start_date, end_date = date_range
+                start_str = start_date.strftime("%Y-%m-%d 00:00:00")
+                end_str = end_date.strftime("%Y-%m-%d 23:59:59")
+
+                with st.spinner("正在从数据库检索数据..."):
                     import database_manager
 
-                    target_device = next((d for d in st.session_state.device_data if d['deviceName'] == export_gh), None)
-                    target_sensor = next((s for s in target_device.get('sensorsList', []) if s.get("sensorName") == export_sensor_name), None)
-                    
-                    if not target_sensor:
-                        st.error(f"大棚 {export_gh} 下未找到指标：{export_sensor_name}")
+                    # 构建查询条件
+                    sql_filters = []
+                    query_params = []
+
+                    # 大棚过滤
+                    if export_gh != "所有大棚":
+                        sql_filters.append("d.gh_name = %s")
+                        query_params.append(export_gh)
+                    if export_sensor_name != "所有传感器":
+                        sql_filters.append("s.sensor_name = %s")
+                        query_params.append(export_sensor_name)
+                    # 时间过滤
+                    sql_filters.append("sh.add_time BETWEEN %s AND %s")
+                    query_params.extend([start_str, end_str])
+
+                    # SQL组合
+                    where_clause = " AND ".join(sql_filters)
+                    sql = f"""
+                        SELECT 
+                            d.gh_name AS 温室,
+                            s.sensor_name AS 传感器,
+                            sh.value AS 数值,
+                            sh.add_time AS 采集时间,
+                            s.unit AS 单位
+                        FROM sensor_history sh
+                        JOIN sensors s ON sh.sensor_id = s.sensor_id
+                        JOIN devices d ON s.device_id = d.device_id
+                        WHERE {where_clause}
+                        ORDER BY d.gh_name, s.sensor_name, sh.add_time
+                    """
+                    # 查询数据库
+                    try:
+                        db_manager.init_db()
+                        conn = db_manager.get_connection()
+                        with conn.cursor() as cursor:
+                            cursor.execute(sql, query_params)
+                            rows = cursor.fetchall()
+                        conn.close()
+                    except Exception as e:
+                        st.error(f"数据库查询失败: {e}")
+                        rows = []
+
+                    if not rows:
+                        st.warning("未检索到符合条件的数据。")
                     else:
-                        sensor_id = target_sensor.get("id")
-                        unit = target_sensor.get("unit", "")
-                        
-                        # 调用我们写的查询接口
-                        history_rows = database_manager.get_sensor_history(sensor_id, start_str, end_str)
-                        if not history_rows:
-                            st.warning(f"数据库中未找到 {start_str} 至 {end_str} 期间的数据。")
-                        else:
-                            df_export = pd.DataFrame(history_rows)
-                            # 清洗并美化数据表头
-                            df_export = df_export.rename(columns={
-                                "add_time": "采集时间", 
-                                "val": f"{export_sensor_name}数值 ({unit})",
-                                "switcher": "开关状态"
-                            })
-                            
-                            st.success(f"✅ 成功提取到 {len(df_export)} 条历史记录！")
-                            st.dataframe(df_export, height=250)
-                            
-                            # 转换为 CSV 以下载
-                            csv_data = df_export.to_csv(index=False).encode('utf-8-sig') # utf-8-sig 兼容 Excel
-                            st.download_button(
-                                label="📥 点击下载至本地 (CSV)",
-                                data=csv_data,
-                                file_name=f"{export_gh}_{export_sensor_name}_历史数据.csv",
-                                mime="text/csv",
-                                width = 'stretch'
-                            )
-        else:
-            st.info("请选择一个完整的起止日期范围。")
+                        # 转 DataFrame
+                        df_export = pd.DataFrame(rows)
+                        df_export['数值'] = pd.to_numeric(df_export['数值'], errors='coerce')
+                        df_export['采集时间'] = pd.to_datetime(df_export['采集时间']).dt.strftime('%Y-%m-%d %H:%M:%S')
+                        df_export['单位'] = df_export['单位'].fillna("")
+
+                        # 显示表格
+                        st.success(f"✅ 成功提取 {len(df_export)} 条记录！")
+                        st.dataframe(df_export, height=300)
+
+                        # 下载 CSV
+                        csv_data = df_export.to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            label="📥 下载 CSV",
+                            data=csv_data,
+                            file_name=f"历史数据_{export_gh}_{export_sensor_name}.csv",
+                            mime="text/csv"
+                        )
+
 
 # ----------------- 页面四：批次工单与联控 -----------------
 elif menu == "📋 批次工单与联控 (抓生产)":
@@ -757,28 +894,21 @@ elif menu == "📋 批次工单与联控 (抓生产)":
         # ================= 【需求6】多设备联控 =================
         st.subheader("🚀 多设备一键联控")
         st.caption("勾选多个目标，系统将自动识别可控硬件并并发下发指令。")
-        
-        # 1. 提取真实在线的设备名称
         online_devices = [d['deviceName'] for d in st.session_state.device_data if d.get('isLine') == 1]
         
         if not online_devices:
             st.error("当前无在线设备可控！")
         else:
             target_ghs = st.multiselect("1. 勾选需要联控的在线温室", online_devices, default=online_devices[0:1] if online_devices else None)
-            
-            # 2. 【核心逻辑】动态提取选定大棚下的控制类设备名称 (sensorTypeId 为 2, 5, 6)
+
             switch_names = set()
             for d in st.session_state.device_data:
                 if d.get('deviceName') in target_ghs:
                     sensors = d.get('sensorsList') or []
                     for s in sensors:
-                        # 只筛选控制类型传感器
-                        if s.get('sensorTypeId') in [2, 5, 6]:
+                        if s.get('sensorTypeId') == 2:
                             name = s.get("sensorName")
-                            if name:
-                                switch_names.add(name)
-            
-            # 3. 动态组装下拉菜单选项
+                            if name:switch_names.add(name)
             action_options = []
             if switch_names:
                 for name in sorted(list(switch_names)):
@@ -786,8 +916,7 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                     action_options.append(f"🔴 关闭所有 {name}")
             else:
                 action_options = ["⚠️ 选中的大棚暂无可控设备"]
-                
-            # 4. 渲染动态选项
+
             action = st.selectbox("2. 自动识别并选择统一执行的动作", action_options)
             if st.button("🚀 下发联控指令", type="primary", use_container_width=True):
                 if not target_ghs:
@@ -795,74 +924,51 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                 elif "⚠️" in action:
                     st.error("当前无有效指令可下发。")
                 else:
-                    with st.spinner("正在向云端通信矩阵下发指令，请稍候..."):
-                        # ================= 1. 解析动作意图 =================
-                        is_open = "打开" in action
-                        target_switcher_val = 1 if is_open else 0
-                        
-                        # 提取目标设备名称 (去除前缀 "🟢 打开所有 " 或 "🔴 关闭所有 ")
-                        target_sensor_name = action.replace("🟢 打开所有 ", "").replace("🔴 关闭所有 ", "")
-                        
-                        success_count = 0
-                        fail_count = 0
-                        exec_details = [] # 用于记录每台设备的执行结果明细
-                        # ================= 2. 遍历匹配与真实下发 =================
-                        for d in st.session_state.device_data:
-                            gh_name = d.get('deviceName')
-                            if gh_name in target_ghs:
-                                device_no = d.get('deviceNo')
-                                for s in d.get('sensorsList', []):
-                                    s_type = s.get('sensorTypeId')
-                                    # 确保是开关型设备
-                                    if s_type in [2, 5, 6]:
-                                        current_name = s.get('sensorName', '').strip()
-                                        if current_name == target_sensor_name:
-                                            sensor_id = s.get('id')
-                                            try:
-                                                # 假设你的 client 实例叫 client (如果在 session_state 中，请用 st.session_state.client)
-                                                ctrl_res = client.switcher_controller(
-                                                    device_no=device_no,
-                                                    sensor_id=sensor_id,
-                                                    switcher=target_switcher_val
-                                                )
-                                                if ctrl_res: 
-                                                    exec_details.append({
-                                                        "目标大棚": gh_name, 
-                                                        "控制对象": current_name, 
-                                                        "动作": "开启 🟢" if target_switcher_val else "关闭 🔴", 
-                                                        "状态": "✅ 成功"
-                                                    })
-                                                    success_count += 1
-                                                else:
-                                                    exec_details.append({
-                                                        "目标大棚": gh_name, 
-                                                        "控制对象": current_name, 
-                                                        "动作": "开启" if target_switcher_val else "关闭", 
-                                                        "状态": "❌ 失败(返回值异常)"
-                                                    })
-                                                    fail_count += 1
-                                                    
-                                            except Exception as e:
-                                                exec_details.append({
-                                                    "目标大棚": gh_name, 
-                                                    "控制对象": current_name, 
-                                                    "动作": "开启" if target_switcher_val else "关闭", 
-                                                    "状态": f"⚠️ 错误: {e}"
-                                                })
-                                                fail_count += 1
-
-                        # ================= 3. 结果反馈展示 =================
-                        if success_count > 0 and fail_count == 0:
-                            st.success(f"✅ 联控指令下发完毕！共成功触达 {success_count} 个设备。")
-                        elif fail_count > 0:
-                            st.warning(f"⚠️ 指令下发完成，但存在异常。成功: {success_count}，失败: {fail_count}。请检查设备是否离线。")
-                        else:
-                            st.error("❌ 未找到对应的设备实体，请刷新数据源重试。")
-                        
-                        # 以表格形式展示详细日志，一目了然
-                        if exec_details:
-                            st.dataframe(exec_details, use_container_width=True)
-    
+                        if st.session_state.get("api_client") is None:
+                            try:
+                                client = IotClient() 
+                                login_res = client.login(USERNAME, PASSWORD, API_KEY)
+                                if login_res.get("flag") == "00":
+                                    token_res = client.get_access_token(USERNAME, PASSWORD)
+                                    if token_res.get("flag") == "00":
+                                        st.session_state["api_client"] = client
+                                    else:
+                                        st.error("❌ 获取访问令牌失败。")
+                                        st.stop()
+                                else:
+                                    st.error("❌ 云端平台登录失败。")
+                                    st.stop()
+                            except Exception as e:
+                                st.error(f"客户端初始化发生异常: {e}")
+                                st.stop()  
+                        api_client = st.session_state.get("api_client")
+                        if api_client:
+                            is_open = "打开" in action
+                            target_switcher_val = 1 if is_open else 0
+                            target_sensor_name = action.replace("🟢 打开所有 ", "").replace("🔴 关闭所有 ", "")
+                            success_cnt, fail_cnt, skip_cnt, details_log = execute_batch_control(
+                                client=api_client, 
+                                target_ghs=target_ghs, 
+                                target_sensor_name=target_sensor_name, 
+                                target_switcher_val=target_switcher_val, 
+                            )
+                            summary_msg = f"操作完毕。成功指令: **{success_cnt}**"
+                            if skip_cnt > 0:
+                                summary_msg += f"，拦截冗余指令: **{skip_cnt}** (已是目标状态)"
+                            if fail_cnt > 0:
+                                summary_msg += f"，失败: **{fail_cnt}**"
+                                
+                            if fail_cnt == 0 and success_cnt > 0:
+                                st.success(f"✅ {summary_msg}")
+                            elif fail_cnt > 0:
+                                st.warning(f"⚠️ {summary_msg}。请检查失败设备网络。")
+                            elif success_cnt == 0 and skip_cnt > 0:
+                                st.success(f"✅ 所选大棚设备已经全部处于目标状态，无需重复下发指令。")
+                            else:
+                                st.error("❌ 未匹配到可控的物理设备实体。")
+                            
+                            if details_log:
+                                st.dataframe(pd.DataFrame(details_log), use_container_width=True)
     with col2:
         # ================= 【需求9】电子工单模板 =================
         st.subheader("📑 标准化电子工单")
@@ -1055,7 +1161,7 @@ elif menu == "⚙️ 策略与预警 (设规则)":
         if submit:
             with st.spinner("正在写入云端规则..."):
                 try:
-                    db_manager.init_db() # 确保表结构存在
+                    db_manager.init_db() 
                     conn = db_manager.get_connection()
                     with conn.cursor() as cursor:
                         sql = """
