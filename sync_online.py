@@ -110,3 +110,21 @@ def check_alerts_logic(snapshot):
 if __name__ == "__main__":
     db_manager.init_db()
     run_single_sync()
+    
+    
+#     sk-86faedf781a859f43715983e97637f0dfca807dbf2058dce243a66a4dac54ba6
+    
+#     time curl https://api.openai.com/v1/models -H "Authorization: Bearer sk-86faedf781a859f43715983e97637f0dfca807dbf2058dce243a66a4dac54ba6"
+  
+#   curl.exe https://api.openai.com/v1/models -H "Authorization: Bearer sk-86faedf781a859f43715983e97637f0dfca807dbf2058dce243a66a4dac54ba6"
+  
+#   curl https://veepai-dev.eye4.cn:28080/v1/models \
+#   -H "Authorization: Bearer sk-86faedf781a859f43715983e97637f0dfca807dbf2058dce243a66a4dac54ba6"
+  
+#   curl https://veepai-dev.eye4.cn:28080/v1/responses \
+#   -H "Authorization: Bearer sk-86faedf781a859f43715983e97637f0dfca807dbf2058dce243a66a4dac54ba6" \
+#   -H "Content-Type: application/json" \
+#   -d '{
+#     "model":"gpt-5.5",
+#     "input":"hello"
+#   }'

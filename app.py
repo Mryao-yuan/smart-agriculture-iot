@@ -10,6 +10,7 @@ import plotly.graph_objects as got
 from sheduler import device_info_get
 from config import *
 import database_manager 
+import db_manager
 
 
 from utils.weather import get_weather_amap,init_weather_alert_config,get_weather_alert
@@ -500,7 +501,6 @@ elif menu == "📈 多维数据分析 (查根因)":
     metric_opts = sorted(list(valid_metrics))
     base_metric_opts = sorted(list(base_metrics))
     
-    # 全局时间维度选择（影响 Tab1 和 Tab2）
     st.sidebar.markdown("---")
     st.sidebar.subheader("📅 分析时间跨度")
     analysis_range = st.sidebar.selectbox(
@@ -518,73 +518,115 @@ elif menu == "📈 多维数据分析 (查根因)":
         st.stop()
         
     # ================= 2. 渲染三大分析模块 =================
-    tab1, tab2, tab3 = st.tabs(["📊 参数相关性分析 (组合图表)", "📉 前中后区域聚合", "📥 历史数据导出"])
+    tab1, tab2, tab3 = st.tabs(["📊 参数相关性分析", "📉 前中后区域聚合", "📥 历史数据导出"])
     
     with tab1:
         # ---------------- 【需求3】参数相关性分析 ----------------
-        st.subheader("参数相关性分析 (自动寻优)")
-        st.markdown("通过对比各棚的 **自变量** 与 **因变量**，寻找最佳生长环境参数组合。")
-        
-        c1, c2 = st.columns(2)
-        x_metric = c1.selectbox("横坐标 (X轴) - 例如光照、土壤EC", metric_opts, index=0)
-        y_metric = c2.selectbox("纵坐标 (Y轴) - 例如温度、酸碱度", metric_opts, index=1 if len(metric_opts) > 1 else 0)
-        if x_metric == y_metric:
-            st.warning("⚠️ 请选择两个【不同】的参数进行相关性对比。")
-        else:
-            # 只有当两个指标不同时，才去遍历数据和画图
-            corr_data = []
-            for d in st.session_state.device_data:
-                gh_name = d.get("deviceName", "未知")
-                sensors = d.get('sensorsList', [])
-                # 精确查找 X 和 Y 对应传感器的值
-                x_sensor = next((s for s in sensors if s.get("sensorName") == x_metric), None)
-                y_sensor = next((s for s in sensors if s.get("sensorName") == y_metric), None)
-                
-                if x_sensor and y_sensor:
-                    try:
-                        corr_data.append({
-                            "温室": gh_name, 
-                            x_metric: float(x_sensor.get("value")), 
-                            y_metric: float(y_sensor.get("value"))
-                        })
-                    except:
-                        continue # 容错处理
-                    
-            df_corr = pd.DataFrame(corr_data)
-            if not df_corr.empty:
-                # 绘制散点图并加上 OLS 线性回归趋势线
-                fig_scatter = px.scatter(
-                    df_corr, x=x_metric, y=y_metric, hover_name="温室", 
-                    trendline="ols", color="温室", size_max=15,
-                    title=f"各棚【{x_metric}】对【{y_metric}】的相关性影响"
-                )
-                fig_scatter.update_traces(marker=dict(size=12))
-                st.plotly_chart(fig_scatter, width = 'stretch')
-                
-                # 相关性
-                # 计算皮尔逊相关系数
-                r_value = df_corr[x_metric].corr(df_corr[y_metric])
-                
-                if pd.isna(r_value):
-                    analysis_text = "数据点方差不足，无法计算有效相关性。"
+        st.subheader("参数相关性分析")
+        st.markdown("通过对比各棚的传感器数据，找到两个传感器数据之间的相关性。")
+
+        device_names = [d.get("deviceName", "未知") for d in st.session_state.device_data]
+        device_names = sorted(list(set(device_names)))
+
+        c_gh, c1, c2 = st.columns(3)
+        selected_gh = c_gh.selectbox("🏠 选择分析目标", device_names)
+        dynamic_metric_opts = []
+        target_device = next((d for d in st.session_state.device_data if d.get("deviceName") == selected_gh), None)
+        if target_device :
+            for s in target_device["sensorsList"]:
+                s_name = s.get("sensorName")
+                if s.get("sensorTypeId") != 1:
+                    continue
+                dynamic_metric_opts.append(s_name)    
+            dynamic_metric_opts = sorted(list(set(dynamic_metric_opts)))
+            print(f"🔍 可用于分析的传感器选项: {dynamic_metric_opts}")
+        # 2. 渲染下拉框
+        if dynamic_metric_opts:
+            default_y_index = 1 if len(dynamic_metric_opts) > 1 else 0
+            x_metric = c1.selectbox("横坐标 - 例如光照", dynamic_metric_opts, index=0)
+            y_metric = c2.selectbox("纵坐标 - 例如温度", [metric for metric in dynamic_metric_opts if metric != x_metric], index=default_y_index)
+            with st.spinner(f"正在拉取【{selected_gh}】自 {start_time.strftime('%Y-%m-%d %H:%M')} 以来的历史数据..."):
+                db_manager.init_db() 
+                conn = db_manager.get_connection()
+                history_records = []      
+                try:
+                    with conn.cursor() as cursor:
+                        sql = """
+                            SELECT 
+                                sh.add_time AS record_time, 
+                                s.sensor_name, 
+                                sh.value AS sensor_value 
+                            FROM sensor_history sh
+                            JOIN sensors s ON sh.sensor_id = s.sensor_id
+                            JOIN devices d ON s.device_id = d.device_id
+                            WHERE d.gh_name = %s 
+                              AND sh.add_time >= %s
+                              AND s.sensor_name IN (%s, %s)
+                        """
+                        cursor.execute(sql, (selected_gh, start_time, x_metric, y_metric))
+                        history_records = cursor.fetchall()
+                except Exception as e:
+                    st.error(f"数据库查询失败: {e}")
+                finally:
+                    conn.close()
+                if not history_records:
+                    st.info(f"暂无【{selected_gh}】在此时段内的历史数据。")
                 else:
-                    # 将数学系数转化为大白话农业解读
-                    if r_value > 0.7:
-                        insight = "呈现 **强正相关** 📈。这意味着随着数值上升，目标指标会呈显著上升趋势。在农事操作中，可以通过提升前者来有效拉高后者。"
-                    elif r_value > 0.3:
-                        insight = "呈现 **弱至中度正相关** ↗️。两者有一定正向关联，但可能还受到其他环境因素的干扰。"
-                    elif r_value > -0.3:
-                        insight = "呈现 **无明显线性相关** ➖。说明这两个参数之间在当前状态下没有直接的因果或联动关系。"
-                    elif r_value > -0.7:
-                        insight = "呈现 **中度负相关** ↘️。两者有一定反向制约关系，一个上升时，另一个倾向于下降。"
+                    df_raw = pd.DataFrame(history_records)
+                    df_raw['sensor_value'] = pd.to_numeric(df_raw['sensor_value'], errors='coerce')
+                    
+                    df_pivot = df_raw.pivot_table(
+                        index='record_time', 
+                        columns='sensor_name', 
+                        values='sensor_value'
+                    ).reset_index()
+                    
+                    if x_metric in df_pivot.columns and y_metric in df_pivot.columns:
+                        df_corr = df_pivot[['record_time', x_metric, y_metric]].dropna()
+                        df_corr.rename(columns={"record_time": "采集时间"}, inplace=True)
+                        df_corr['采集时间'] = pd.to_datetime(df_corr['采集时间']).dt.strftime('%Y-%m-%d %H:%M')
+                        
+                        if len(df_corr) < 3: 
+                            st.warning(f"⚠️ 当前时间跨度内，有效的对比数据过少（仅 {len(df_corr)} 条），无法进行回归分析。")
+                        else:
+                            fig_scatter = px.scatter(
+                                df_corr, 
+                                x=x_metric, 
+                                y=y_metric, 
+                                hover_name="采集时间", 
+                                trendline="lowess", 
+                                color_discrete_sequence=["#1f77b4"],
+                                title=f"【{selected_gh}】历史相关性：{x_metric} vs {y_metric}"
+                            )
+                            fig_scatter.update_traces(
+                                marker=dict(size=10, opacity=0.6), 
+                                selector=dict(mode="markers") # 选择器：只对点生效
+                            )
+                            fig_scatter.update_traces(
+                                line=dict(color="#ff7f0e", width=2), # 换成醒目的亮橙色，并稍微加粗
+                                selector=dict(mode="lines") # 选择器：只对线生效
+                            )
+                            st.plotly_chart(fig_scatter, use_container_width=True)
+                            r_value = df_corr[x_metric].corr(df_corr[y_metric], method='spearman') # 计算 Spearman 相关系数
+                            
+                            if pd.isna(r_value):
+                                st.info("💡 **系统智能分析**：\n\n数据点方差不足（数值在此期间几乎无变化），无法计算有效相关性。")
+                            else:
+                                if r_value > 0.7:
+                                    insight = "呈现 **强正相关** 📈。这意味着两者的**增长趋势高度一致**，当一个指标上升时，另一个指标几乎必然跟随上升（抗干扰能力强）。"
+                                elif r_value > 0.3:
+                                    insight = "呈现 **中弱度正相关** ↗️。两者存在一定的**同向变化趋势**，但步调并非完全一致，可能还受到其他环境变量的交织影响。"
+                                elif r_value > -0.3:
+                                    insight = "呈现 **无明显趋势关联** ➖。说明这两个参数之间在此期间既没有明显的跟随变化，也没有明显的反向制约关系。"
+                                elif r_value > -0.7:
+                                    insight = "呈现 **中度负相关** ↘️。两者存在一定的**反向制约趋势**，一个处于高位时，另一个往往处于低位。"
+                                else:
+                                    insight = "呈现 **强负相关** 📉。两者之间存在极强的**此消彼长**效应。"
+                                st.info(f"💡 **系统智能分析 (Spearman 秩相关)**：\n\n经计算，本周期内 {x_metric} 与 {y_metric} 的相关系数(rho)为 **{r_value:.2f}**，{insight}")
                     else:
-                        insight = "呈现 **强负相关** 📉。两者之间存在明显的拮抗效应。"
-                
-                # 使用带颜色的状态框展示分析结论
-                st.info(f"💡 **系统智能分析诊断**：\n\n经计算，当前【{x_metric}】与【{y_metric}】的相关系数(r)为 **{r_value:.2f}**，{insight}")
-            else:
-                st.info(f"暂无法在各棚中同时匹配到有效的【{x_metric}】和【{y_metric}】数据。")
-      
+                        st.info(f"获取的历史数据中未包含【{x_metric}】或【{y_metric}】的有效交叉数据。")
+        else:
+            c1.warning(f"⚠️ 【{selected_gh}】下暂无连续型环境传感器数据") 
     with tab2:
         # ---------------- 【需求3】前中后区域聚合分析 ----------------
         st.subheader("大棚微气候区域温差分析 (前/中/后)")
@@ -606,8 +648,7 @@ elif menu == "📈 多维数据分析 (查根因)":
             for s in sensors:
                 name = s.get("sensorName", "")
                 val_str = str(s.get("value", "0"))
-                if val_str in ['0', '0.0']: continue
-                
+                if val_str in ['0', '0.0']: continue 
                 try:
                     if agg_base in name:
                         if "1号" in name or "1组" in name: front_val = float(val_str)
@@ -660,8 +701,7 @@ elif menu == "📈 多维数据分析 (查根因)":
             if st.button("🔍 查询历史数据并准备导出", type="primary"):
                 with st.spinner("正在从本地数据库检索..."):
                     import database_manager
-                    
-                    # 反查出目标大棚下该传感器的专属 ID
+
                     target_device = next((d for d in st.session_state.device_data if d['deviceName'] == export_gh), None)
                     target_sensor = next((s for s in target_device.get('sensorsList', []) if s.get("sensorName") == export_sensor_name), None)
                     
@@ -757,27 +797,18 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                         success_count = 0
                         fail_count = 0
                         exec_details = [] # 用于记录每台设备的执行结果明细
-                        
                         # ================= 2. 遍历匹配与真实下发 =================
                         for d in st.session_state.device_data:
                             gh_name = d.get('deviceName')
-                            
-                            # 只处理用户勾选的大棚
                             if gh_name in target_ghs:
                                 device_no = d.get('deviceNo')
-                                
                                 for s in d.get('sensorsList', []):
                                     s_type = s.get('sensorTypeId')
-                                    
                                     # 确保是开关型设备
                                     if s_type in [2, 5, 6]:
                                         current_name = s.get('sensorName', '').strip()
-                                        
-                                        # 名字精确匹配
                                         if current_name == target_sensor_name:
                                             sensor_id = s.get('id')
-                                            
-                                            # --- 调用真实 API 接口 ---
                                             try:
                                                 # 假设你的 client 实例叫 client (如果在 session_state 中，请用 st.session_state.client)
                                                 ctrl_res = client.switcher_controller(
@@ -785,9 +816,6 @@ elif menu == "📋 批次工单与联控 (抓生产)":
                                                     sensor_id=sensor_id,
                                                     switcher=target_switcher_val
                                                 )
-                                                
-                                                # 解析返回结果 (此处假设返回字典且包含 code 或 success 字段，请根据实际接口调整)
-                                                # 如果接口只要不抛异常就算成功，可以直接当成功处理
                                                 if ctrl_res: 
                                                     exec_details.append({
                                                         "目标大棚": gh_name, 
@@ -939,15 +967,13 @@ elif menu == "⚙️ 策略与预警 (设规则)":
             current_gh_metrics = set() # 当前大棚的传感器集合
             for s in d.get('sensorsList', []):
                 if s.get('sensorTypeId') == target_types:
-                    value = str(s.get("value", ""))
-                    if s.get('sensorTypeId') == 1 and value in ['0', '0.0', '']:
-                        continue
                     name = s.get("sensorName", "")
                     unit = s.get("unit", "")
                     base_name = re.sub(r'^\d+[号组]', '', name).strip()
                     if base_name:
                         current_gh_metrics.add(base_name)
                         metric_info_map[base_name] = {"unit": unit, "type": s.get('sensorTypeId') }
+                    
             # 求交集算法
             if common_metrics is None:
                 common_metrics = current_gh_metrics # 第一个大棚作为初始集合
@@ -959,17 +985,13 @@ elif menu == "⚙️ 策略与预警 (设规则)":
         for d in st.session_state.device_data:
             if d['deviceName'] == target_gh:
                 for s in d.get('sensorsList', []):
-                    if s.get('sensorTypeId') in target_types:
-                        value = str(s.get("value", ""))
-                        if s.get('sensorTypeId') and value in ['0', '0.0', '']:
-                            continue
+                    if s.get('sensorTypeId') == target_types:
                         name = s.get("sensorName", "")
                         unit = s.get("unit", "")
                         base_name = re.sub(r'^\d+[号组]', '', name).strip()
                         if base_name:
                             metric_info_map[base_name] = {"unit": unit, "type": s.get('sensorTypeId')}
                 break
-        print(f"局部模式下 {target_gh} 的传感器与单位映射:", metric_info_map) 
         metric_opts = sorted(list(metric_info_map.keys()))
     # ================= 3. 渲染配置表单 =================
     if not metric_opts:
@@ -1011,13 +1033,11 @@ elif menu == "⚙️ 策略与预警 (设规则)":
             )
         else:
             st.info("💡 **开关/状态量报警**：请选择触发报警的目标状态。")
-            # 使用下拉框代替数字输入，防呆设计
             status_choice = st.selectbox(
                 "当状态变为以下值时报警：", 
                 options=[1, 0], 
-                format_func=lambda x: "🟢 状态 1 (通常代表异常/开启)" if x == 1 else "🔴 状态 0 (通常代表恢复/关闭)"
+                format_func=lambda x: "🟢 开启状态" if x == 1 else "🔴 关闭状态"
             )
-            # 对于开关量，借用 max_val 存储触发状态，min_val 设为占位符
             max_v = float(status_choice)
             min_v = -999.0 
         
@@ -1026,7 +1046,6 @@ elif menu == "⚙️ 策略与预警 (设规则)":
         if submit:
             with st.spinner("正在写入云端规则..."):
                 try:
-                    import db_manager
                     db_manager.init_db() # 确保表结构存在
                     conn = db_manager.get_connection()
                     with conn.cursor() as cursor:
