@@ -406,7 +406,6 @@ if menu == "🌐 设备整体状态":
             # --- 3. 渲染图表 ---
             if not df_curve.empty:
                 
-
                 sorted_gh_names = sorted(df_curve["温室名称"].unique(), key=extract_gh_num)
                 fig_curve = px.line(
                     df_curve, x=x_col, y="数值", color="温室名称",
@@ -518,8 +517,7 @@ elif menu == "📈 多维数据分析 (查根因)":
         st.stop()
         
     # ================= 2. 渲染三大分析模块 =================
-    tab1, tab2, tab3 = st.tabs(["📊 参数相关性分析", "📉 前中后区域聚合", "📥 历史数据导出"])
-    
+    tab1, tab2, tab3 = st.tabs(["📊 传感器参数相关性分析", "📉 前中后区域聚合", "📥 历史数据导出"])
     with tab1:
         # ---------------- 【需求3】参数相关性分析 ----------------
         st.subheader("参数相关性分析")
@@ -535,7 +533,7 @@ elif menu == "📈 多维数据分析 (查根因)":
         if target_device :
             for s in target_device["sensorsList"]:
                 s_name = s.get("sensorName")
-                if s.get("sensorTypeId") != 1:
+                if s.get("sensorTypeId") != 1 and s.get("value") in ['0', '0.0']:
                     continue
                 dynamic_metric_opts.append(s_name)    
             dynamic_metric_opts = sorted(list(set(dynamic_metric_opts)))
@@ -574,13 +572,26 @@ elif menu == "📈 多维数据分析 (查根因)":
                 else:
                     df_raw = pd.DataFrame(history_records)
                     df_raw['sensor_value'] = pd.to_numeric(df_raw['sensor_value'], errors='coerce')
+                    # 时间跨度真实性校验,确保 record_time 是 Pandas 的时间格式
+                    df_raw['record_time'] = pd.to_datetime(df_raw['record_time'])
+                    df_raw['record_time'] = df_raw['record_time'].dt.round('10min') # 时间对齐 (降采样)
                     
+                    actual_start = df_raw['record_time'].min()
+                    actual_end = df_raw['record_time'].max()
+                    if (actual_start - start_time).total_seconds() > 7200: # 2 h
+                        str_start = actual_start.strftime('%Y-%m-%d %H:%M')
+                        str_end = actual_end.strftime('%Y-%m-%d %H:%M')
+                        st.info(
+                            f"💡 **数据区间动态调整**：您选择了分析【{analysis_range}】，"
+                            f"但该大棚可追溯的最早记录始于 {str_start}。\n\n"
+                            f"为保证分析结果真实有效，本次相关性分析的实际数据区间为：**{str_start} 至 {str_end}**。"
+                        )
                     df_pivot = df_raw.pivot_table(
                         index='record_time', 
                         columns='sensor_name', 
-                        values='sensor_value'
+                        values='sensor_value',
+                        aggfunc='mean'
                     ).reset_index()
-                    
                     if x_metric in df_pivot.columns and y_metric in df_pivot.columns:
                         df_corr = df_pivot[['record_time', x_metric, y_metric]].dropna()
                         df_corr.rename(columns={"record_time": "采集时间"}, inplace=True)
@@ -608,12 +619,11 @@ elif menu == "📈 多维数据分析 (查根因)":
                             )
                             st.plotly_chart(fig_scatter, use_container_width=True)
                             r_value = df_corr[x_metric].corr(df_corr[y_metric], method='spearman') # 计算 Spearman 相关系数
-                            
                             if pd.isna(r_value):
                                 st.info("💡 **系统智能分析**：\n\n数据点方差不足（数值在此期间几乎无变化），无法计算有效相关性。")
                             else:
                                 if r_value > 0.7:
-                                    insight = "呈现 **强正相关** 📈。这意味着两者的**增长趋势高度一致**，当一个指标上升时，另一个指标几乎必然跟随上升（抗干扰能力强）。"
+                                    insight = "呈现 **强正相关** 📈。"
                                 elif r_value > 0.3:
                                     insight = "呈现 **中弱度正相关** ↗️。两者存在一定的**同向变化趋势**，但步调并非完全一致，可能还受到其他环境变量的交织影响。"
                                 elif r_value > -0.3:
@@ -639,7 +649,6 @@ elif menu == "📈 多维数据分析 (查根因)":
         for d in st.session_state.device_data:
             gh = d.get("deviceName")
             sensors = d.get('sensorsList', [])
-            
             # 动态组合寻找前中后的名字（支持 "号" 和 "组"）
             front_val = None
             mid_val = None
