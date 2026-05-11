@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime
+from utils.timezone import get_local_now
 
 DEBUG_MODE = True
 
@@ -23,7 +24,7 @@ def queue_pending_control_binding(gh_name, device_no, sensor_id, sensor_name, ta
         "target_switcher": target_switcher,
         "action_text": "开启" if target_switcher == 1 else "关闭",
         "form_type": form_type,
-        "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "event_time": get_local_now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 def handle_toggle_change(client, d_name,d_no, s_id, s_name,sensor_dict,toggle_key):

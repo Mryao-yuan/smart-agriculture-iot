@@ -6,6 +6,7 @@ import re
 import db_manager
 from config import *
 from utils.iot_client import IotClient  
+from utils.timezone import get_local_now
 
 ALERT_COOLDOWN_HOURS = 5
 
@@ -141,7 +142,7 @@ def check_alerts_logic(snapshot):
             cursor.execute("SELECT * FROM alert_state")
             alert_states = cursor.fetchall()
             state_map = {(row['target_gh'], row['metric_name']): row for row in alert_states}
-            now = datetime.now()
+            now = get_local_now()
 
             for data in snapshot:
                 try:
@@ -170,13 +171,13 @@ def check_alerts_logic(snapshot):
 
                             cursor.execute("""
                                 INSERT INTO alert_state
-                                    (target_gh, metric_name, is_active, last_status, last_alert_time, last_value)
+                                    (target_gh, metric_name, is_active, last_status, last_alert_time, last_value_text)
                                 VALUES (%s, %s, 1, 'abnormal', %s, %s)
                                 ON DUPLICATE KEY UPDATE
                                     is_active = 1,
                                     last_status = 'abnormal',
                                     last_alert_time = IF(%s, %s, last_alert_time),
-                                    last_value = %s
+                                    last_value_text = %s
                             """, (
                                 rule['target_gh'],
                                 rule['metric_name'],
@@ -197,13 +198,13 @@ def check_alerts_logic(snapshot):
                                 send_recovery_msg(rule['ding_webhook'], data, message)
                             cursor.execute("""
                                 INSERT INTO alert_state
-                                    (target_gh, metric_name, is_active, last_status, last_recovery_time, last_value)
+                                    (target_gh, metric_name, is_active, last_status, last_recovery_time, last_value_text)
                                 VALUES (%s, %s, 0, 'normal', %s, %s)
                                 ON DUPLICATE KEY UPDATE
                                     is_active = 0,
                                     last_status = 'normal',
                                     last_recovery_time = %s,
-                                    last_value = %s
+                                    last_value_text = %s
                             """, (
                                 rule['target_gh'],
                                 rule['metric_name'],

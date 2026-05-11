@@ -13,14 +13,15 @@ from config import *
 import db_manager
 
 
-from utils.weather import get_weather_amap,init_weather_alert_config,get_weather_alert
+from utils.weather import init_weather_alert_config,get_weather_alert
 from utils.login import check_password
 from utils.text_operate import extract_gh_num,get_sorted_devices,parse_zone,process_history_records
 from utils.alter import user_webhook_check
 from utils.style import load_local_css,generate_sensor_card_html
 from utils.controllers import DEBUG_MODE, handle_toggle_change, execute_batch_control
 from utils.iot_client import IotClient
-from utils.page import get_device_status_meta, sensor_display_value, sensor_pretty_name, sensor_accent_color, save_binding_work_order, render_greenhouse_selector_cards, render_binding_form, render_greenhouse_sandbox
+from utils.page import get_device_status_meta, sensor_display_value, sensor_pretty_name, sensor_accent_color, save_binding_work_order, render_greenhouse_selector_cards, render_binding_form, render_greenhouse_sandbox, get_cached_weather
+from utils.timezone import get_local_now
 from datetime import datetime
 
 
@@ -42,6 +43,8 @@ if 'device_data' not in st.session_state:
     st.session_state.device_data = [] # 存放拉取的真实设备数据
 if 'menu_target' not in st.session_state:
     st.session_state.menu_target = "🌐 设备整体状态"
+if 'device_data_loaded' not in st.session_state:
+    st.session_state.device_data_loaded = False
 
 # ==================== 3. 侧边栏导航 ====================
 with st.sidebar:
@@ -59,12 +62,17 @@ with st.sidebar:
         default_menu = "🌐 设备整体状态"
     menu = st.radio("🏠 业务导航", menu_options, index=menu_options.index(default_menu))
     st.session_state["menu_target"] = menu
-
-    data = device_info_get() 
-    st.session_state.device_data = data.get("dataList", [])
-
-    if st.button("退出登录"):
-        st.session_state.logged_in = False
+    if not st.session_state.device_data_loaded:
+        with st.spinner("正在加载设备数据..."):
+            data = device_info_get()
+            st.session_state.device_data = (data or {}).get("dataList", []) or []
+            st.session_state.device_data_loaded = True
+    if st.button("🔄 刷新设备数据", use_container_width=True):
+        with st.spinner("正在刷新设备数据..."):
+            device_info_get.clear()
+            data = device_info_get()
+            st.session_state.device_data = (data or {}).get("dataList", []) or []
+            st.session_state.device_data_loaded = True
         st.rerun()
 
 # ----------------- 页面一：全局驾驶舱 -----------------
@@ -82,7 +90,7 @@ if menu == "🌐 设备整体状态":
         first_device = st.session_state.device_data[0]
         lat = first_device.get('lat')
         lng = first_device.get('lng')
-        weather_info = get_weather_amap(lat, lng, WEATHER_API_KEY)
+        weather_info = get_cached_weather(lat, lng, WEATHER_API_KEY)
         if weather_info:
             alert_level, alert_msg = get_weather_alert(weather_info, config)
             city = weather_info.get('location', '未知地区').split('省')[-1]
@@ -181,7 +189,7 @@ if menu == "🌐 设备整体状态":
                 ["当前1小时", "今日", "最近一周", "最近一月"],
                 index=1
             )
-        now = datetime.now()
+        now = get_local_now()
         if time_range == "当前1小时":
             start_time = now - timedelta(hours=1)
         elif time_range == "今日":
@@ -215,7 +223,7 @@ if menu == "🌐 设备整体状态":
             df_plot["采集时间"] = pd.to_datetime(df_plot["采集时间"])
             df_plot["数值"] = pd.to_numeric(df_plot["数值"], errors='coerce')
             unit_str = line_chart_data[0].get("单位", "")
-            now = datetime.now()
+            now = get_local_now()
             actual_min_date = df_plot["采集时间"].min().date()
             actual_max_date = df_plot["采集时间"].max().date()
             date_span = (actual_max_date - actual_min_date).days
@@ -363,7 +371,7 @@ elif menu == "📈 多维数据分析":
         index=1
     )
 
-    now = datetime.now()
+    now = get_local_now()
     days_map = {"最近24小时": 1, "最近一周": 7, "最近一月": 30}
     start_time = now - timedelta(days=days_map[analysis_range])
     if not metric_opts:
@@ -442,15 +450,21 @@ elif menu == "📈 多维数据分析":
                             if len(df_corr) < 3: 
                                 st.warning(f"⚠️ 当前时间跨度内，有效的对比数据过少（仅 {len(df_corr)} 条），无法进行回归分析。")
                             else:
-                                fig_scatter = px.scatter(
-                                    df_corr, 
-                                    x=x_metric, 
-                                    y=y_metric, 
-                                    hover_name="采集时间", 
-                                    trendline="lowess", 
-                                    color_discrete_sequence=["#1f77b4"],
-                                    title=f"【{selected_gh}】历史相关性：{x_metric} vs {y_metric}"
-                                )
+                                scatter_kwargs = {
+                                    "data_frame": df_corr,
+                                    "x": x_metric,
+                                    "y": y_metric,
+                                    "hover_name": "采集时间",
+                                    "color_discrete_sequence": ["#1f77b4"],
+                                    "title": f"【{selected_gh}】历史相关性：{x_metric} vs {y_metric}",
+                                }
+                                try:
+                                    import statsmodels.api as sm  # noqa: F401
+                                    scatter_kwargs["trendline"] = "lowess"
+                                except ModuleNotFoundError:
+                                    st.info("💡 当前运行环境未安装 `statsmodels`，已跳过 LOWESS 趋势线，仅展示散点相关性。")
+
+                                fig_scatter = px.scatter(**scatter_kwargs)
                                 fig_scatter.update_traces(
                                     marker=dict(size=10, opacity=0.6), 
                                     selector=dict(mode="markers") # 选择器：只对点生效
@@ -660,7 +674,7 @@ elif menu == "📈 多维数据分析":
         # 3️⃣ 自定义时间段
         date_range = col_ex3.date_input(
             "选择时间范围", 
-            value=(datetime.now() - timedelta(days=1), datetime.now())
+            value=(get_local_now() - timedelta(days=1), get_local_now())
         )
         # 4️⃣ 导出按钮
         export_btn = col_ex4.button("🔍 查询并导出", type="primary")
@@ -772,7 +786,7 @@ elif menu == "📋 批次工单与联控":
         dt_value = normalize_dt(value)
         if dt_value:
             return dt_value.date()
-        return fallback or datetime.now().date()
+        return fallback or get_local_now().date()
 
     def format_duration_value(duration_mins):
         if duration_mins in (None, "", "None"):
@@ -925,7 +939,7 @@ elif menu == "📋 批次工单与联控":
     def save_work_order_records(records):
         if not records:
             return 0
-        finish_time = datetime.now().replace(microsecond=0)
+        finish_time = get_local_now().replace(microsecond=0)
         records_with_finish_time = [tuple(record) + (finish_time,) for record in records]
         conn = db_manager.get_connection()
         try:
@@ -1039,7 +1053,7 @@ elif menu == "📋 批次工单与联控":
     active_batches = [b for b in all_batches if b.get("status") == 1]
     batch_lookup = {format_batch_label(batch): batch for batch in all_batches}
     active_batch_labels = [format_batch_label(batch) for batch in active_batches]
-    today = datetime.now().date()
+    today = get_local_now().date()
     due_soon_count = 0
     overdue_count = 0
 
@@ -1105,7 +1119,7 @@ elif menu == "📋 批次工单与联控":
                 batch_id = batch["batch_id"]
                 start_dt = normalize_dt(batch.get("start_time"))
                 harvest_dt = normalize_dt(batch.get("expected_harvest"))
-                days_passed = max(0, (datetime.now() - start_dt).days) if start_dt else 0
+                days_passed = max(0, (get_local_now() - start_dt).days) if start_dt else 0
                 total_days = (harvest_dt - start_dt).days if start_dt and harvest_dt else 0
                 progress = min(100, max(0, int(days_passed / total_days * 100))) if total_days > 0 else 0
                 days_left = (harvest_dt.date() - today).days if harvest_dt else None
@@ -1272,7 +1286,7 @@ elif menu == "📋 批次工单与联控":
                         fig_batch,
                         selected_batch["crop_name"],
                         normalize_dt(selected_batch["start_time"]),
-                        datetime.now()
+                        get_local_now()
                     )
                     fig_batch.update_layout(height=420, margin={"t": 50, "b": 0}, hovermode="x unified")
                     st.plotly_chart(fig_batch, use_container_width=True)
@@ -1288,8 +1302,8 @@ elif menu == "📋 批次工单与联控":
                 b_crop = c2.text_input("作物名称", placeholder="例如：结球生菜")
                 b_variety = c1.text_input("品种名称", placeholder="例如：北极星一号")
                 b_stage = c2.selectbox("初始生长阶段", stage_options[:-1], key="create_batch_stage")
-                b_start = c1.date_input("定植/播种日期", value=datetime.now().date())
-                b_harvest = c2.date_input("预计采收日期", value=(datetime.now() + timedelta(days=45)).date())
+                b_start = c1.date_input("定植/播种日期", value=get_local_now().date())
+                b_harvest = c2.date_input("预计采收日期", value=(get_local_now() + timedelta(days=45)).date())
                 submit_batch = st.form_submit_button("🚀 确认开启批次", type="primary", use_container_width=True)
 
                 if submit_batch:
@@ -1683,7 +1697,7 @@ elif menu == "⚙️ 策略与预警":
     current_info = metric_info_map.get(target_metric, {"unit": "", "type": 1})
     current_unit = current_info["unit"]
     data_type = current_info["type"]
-    # 获取默认阈值配置 (仅针对数值型有用)
+
     current_cfg = {"unit": current_unit, "min": -10000.0, "max": 100000.0, "step": 1.0, "def_min": 0.0, "def_max": 100.0}
     if data_type == 1:
         for key, cfg in METRIC_BEHAVIOR.items():

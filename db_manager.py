@@ -51,7 +51,7 @@ def init_db():
                     last_status VARCHAR(20),
                     last_alert_time DATETIME,
                     last_recovery_time DATETIME,
-                    last_value VARCHAR(255),
+                    last_value_text VARCHAR(255),
                     update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     UNIQUE KEY uk_alert_state (target_gh, metric_name)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

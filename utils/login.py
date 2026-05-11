@@ -180,8 +180,8 @@ def check_password(bg_path,json_path="./users.json"):
             # 样式容器
             st.markdown("""
                 <div style='text-align: center; margin-bottom: 20px;'>
-                    <div style='font-size: 42px; font-weight: bold; color: #333;'>智慧农业</div>
-                    <div style='font-size: 35px; font-weight: bold; color: #333;'>控制平台</div>
+                    <div style='font-size: 42px; font-weight: bold; color: #333;'>智慧温室</div>
+                    <div style='font-size: 35px; font-weight: bold; color: #333;'>IoT 平台</div>
                 </div>
                 """, unsafe_allow_html=True)
             

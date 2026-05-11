@@ -6,6 +6,8 @@ from datetime import datetime
 from utils.iot_client import IotClient
 from utils.text_operate import extract_gh_num
 from utils.controllers import handle_toggle_change
+from utils.timezone import get_local_now
+from utils.weather import get_weather_amap
 import db_manager
 from config import *
 
@@ -54,7 +56,7 @@ def sensor_accent_color(sensor):
     return "#334155"
 
 def save_binding_work_order(record):
-    finish_time = datetime.now().replace(microsecond=0)
+    finish_time = get_local_now().replace(microsecond=0)
     conn = db_manager.get_connection()
     try:
         with conn.cursor() as cursor:
@@ -129,20 +131,11 @@ def render_greenhouse_selector_cards(devices):
             borderwidth=1,
         ),
     )
-    map_event = st.plotly_chart(
+    st.plotly_chart(
         fig,
         use_container_width=True,
         key="greenhouse_status_map",
-        on_select="rerun",
-        selection_mode="points"
     )
-    selected_points = (map_event or {}).get("selection", {}).get("points", []) if isinstance(map_event, dict) else []
-    if selected_points:
-        selected_name = selected_points[0].get("customdata", [None])[0]
-        if selected_name and selected_name != st.session_state.get("selected_greenhouse"):
-            st.session_state["selected_greenhouse"] = selected_name
-            st.session_state["selected_sandbox_sensor"] = None
-            st.session_state["menu_target"] = "🎮 单棚设备沙盘"
 
     st.markdown("#### 进入设备沙盘")
     card_cols = st.columns(3, gap='large')
@@ -179,6 +172,10 @@ def render_greenhouse_selector_cards(devices):
                 st.session_state["selected_sandbox_sensor"] = None
                 st.session_state["menu_target"] = "🎮 单棚设备沙盘"
                 st.rerun()
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_cached_weather(lat, lng, api_key):
+    return get_weather_amap(lat, lng, api_key)
 
 def render_binding_form(active_batch_labels, batch_lookup):
     pending = st.session_state.get("pending_control_binding")
@@ -510,4 +507,3 @@ def render_greenhouse_sandbox(target_device):
             st.markdown("#### 实时监测")
             st.metric("当前读数", sensor_display_value(selected_sensor))
             st.caption("点击左侧其他设备卡片，可切换查看不同节点实时数据。")
-
