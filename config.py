@@ -8,9 +8,8 @@ API_KEY = "ffec4dee9fa344208f9c3b6c870b4879"
 
 WEATHER_API_KEY = "d8bd7e4c3d59315deb2cbb5931296891"
 
+DEBUG_MODE = True
 
-
-# --- 定义指标属性映射表 (单位、步长、建议初始值) ---
 METRIC_BEHAVIOR = {
     "空温": {"unit": "℃", "min": -10, "max": 60, "step": 0.5, "def_min": 10.0, "def_max": 35.0},
     "空湿": {"unit": "%", "min": 0, "max": 100, "step": 1.0, "def_min": 40.0, "def_max": 90.0},

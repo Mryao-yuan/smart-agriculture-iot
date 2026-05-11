@@ -1,6 +1,30 @@
 import streamlit as st
+from datetime import datetime
 
 DEBUG_MODE = True
+
+def resolve_binding_form_type(sensor_name):
+    sensor_name = (sensor_name or "").strip()
+    if any(k in sensor_name for k in ["雾化", "喷淋", "喷灌", "水泵"]):
+        return "cooling_humidify"
+    if any(k in sensor_name for k in ["卷膜", "卷被", "侧卷", "顶窗", "通风"]):
+        return "ventilation"
+    return None
+
+def queue_pending_control_binding(gh_name, device_no, sensor_id, sensor_name, target_switcher):
+    form_type = resolve_binding_form_type(sensor_name)
+    if not form_type:
+        return
+    st.session_state["pending_control_binding"] = {
+        "gh_name": gh_name,
+        "device_no": device_no,
+        "sensor_id": sensor_id,
+        "sensor_name": sensor_name,
+        "target_switcher": target_switcher,
+        "action_text": "开启" if target_switcher == 1 else "关闭",
+        "form_type": form_type,
+        "event_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 def handle_toggle_change(client, d_name,d_no, s_id, s_name,sensor_dict,toggle_key):
     """
@@ -14,9 +38,7 @@ def handle_toggle_change(client, d_name,d_no, s_id, s_name,sensor_dict,toggle_ke
     sensor_dict["value"] = str(target_switcher)
     
     if DEBUG_MODE:
-        # 在前端弹出提示，让你知道逻辑进来了
         st.toast(f"[测试模式拦截] 准备向【{s_name}】下发 {'开启' if target_switcher == 1 else '关闭'} 指令 (ID: {s_id})", icon="🛡️")
-        # 在后台终端打印参数，让你核对传参对不对
         print(f"✅ [DEBUG] 成功捕获控制事件！\n参数检查：")
         print(f"   - 目标设备: {d_name}")
         print(f"   - 目标设备: {d_no}")
@@ -24,17 +46,20 @@ def handle_toggle_change(client, d_name,d_no, s_id, s_name,sensor_dict,toggle_ke
         print(f"   - 传感器ID: {s_id}")
         print(f"   - 下发动作: {target_switcher} (0关1开)")
         print(f"   - Client是否就绪: {'是' if client else '否'}")
-        return 
+        queue_pending_control_binding(d_name, d_no, s_id, s_name, target_switcher)
+        return
     try:
         res = client.switcher_controller(
             device_no=d_no, 
             sensor_id=s_id, 
             switcher=target_switcher
         )
-        if res:
+        if res and res.get("flag") == "00":
+            queue_pending_control_binding(d_name, d_no, s_id, s_name, target_switcher)
             st.toast(f"✅ 已向【{s_name}】下发 {'开启' if target_switcher == 1 else '关闭'} 指令！", icon="🚀")
         else:
-            st.toast(f"⚠️ 【{s_name}】指令下发可能失败，请检查网络。", icon="⚠️")
+            err_msg = res.get("msg", "未知错误") if isinstance(res, dict) else "未知错误"
+            st.toast(f"⚠️ 【{s_name}】指令下发失败：{err_msg}", icon="⚠️")
     except Exception as e:
         st.toast(f"❌ 接口报错: {e}", icon="❌")
 
@@ -94,37 +119,72 @@ def execute_batch_control(client, target_ghs, target_sensor_name, target_switche
                         action_text = "开启" if target_switcher_val else "关闭 🔴"
                         
                         if DEBUG_MODE:
-                            print(f"✅ [DEBUG 批处理] 模拟向 {gh_name}的{current_name}(ID:{sensor_id}) 下发 {action_text}")
+                            st.toast(
+                                f"[测试模式拦截] 准备向【{current_name}】下发 {'开启' if target_switcher_val == 1 else '关闭'} 指令 (ID: {sensor_id})",
+                                icon="🛡️"
+                            )
+                            print(f"✅ [DEBUG 批处理] 成功捕获联控事件！\n参数检查：")
+                            print(f"   - 目标温室: {gh_name}")
+                            print(f"   - 目标设备编号: {device_no}")
+                            print(f"   - 传感器: {current_name}")
+                            print(f"   - 传感器ID: {sensor_id}")
+                            print(f"   - 下发动作: {target_switcher_val} (0关1开)")
+                            print(f"   - Client是否就绪: {'是' if client else '否'}")
+                            print(f"✅ [DEBUG 批处理] 模拟向 {gh_name} 的 {current_name}(ID:{sensor_id}) 下发 {action_text}")
                             exec_details.append({
-                                "大棚": gh_name, "对象": current_name, 
-                                "动作": action_text, "执行结果": "🛡️ 模拟指令发送成功 (未篡改本地状态)"
+                                "大棚": gh_name,
+                                "对象": current_name,
+                                "动作": action_text,
+                                "目标状态": target_switcher_val,
+                                "设备编号": device_no,
+                                "传感器ID": sensor_id,
+                                "执行结果": "🛡️ 模拟指令发送成功 (未篡改本地状态)",
+                                "接口返回": ""
                             })
                             success_count += 1
-                            
-                        else:
-                            try:
-                                ctrl_res = client.switcher_controller(
-                                    device_no=device_no, sensor_id=sensor_id, switcher=target_switcher_val
-                                )
-                                if ctrl_res: 
-                                    s["switcher"] = str(target_switcher_val)
-                                    s["value"] = str(target_switcher_val)
-                                    exec_details.append({
-                                        "大棚": gh_name, "对象": current_name, 
-                                        "动作": action_text, "执行结果": "✅ 真实触达并同步状态"
-                                    })
-                                    success_count += 1
-                                else:
-                                    exec_details.append({
-                                        "大棚": gh_name, "对象": current_name, 
-                                        "动作": action_text, "执行结果": "❌ 硬件响应异常"
-                                    })
-                                    fail_count += 1
-                            except Exception as e:
+                            continue
+                        try:
+                            ctrl_res = client.switcher_controller(
+                                device_no=device_no, sensor_id=sensor_id, switcher=target_switcher_val
+                            )
+                            if ctrl_res and ctrl_res.get("flag") == "00":
+                                s["switcher"] = str(target_switcher_val)
+                                s["value"] = str(target_switcher_val)
                                 exec_details.append({
-                                    "大棚": gh_name, "对象": current_name, 
-                                    "动作": action_text, "执行结果": f"⚠️ API请求失败"
+                                    "大棚": gh_name,
+                                    "对象": current_name,
+                                    "动作": action_text,
+                                    "目标状态": target_switcher_val,
+                                    "设备编号": device_no,
+                                    "传感器ID": sensor_id,
+                                    "执行结果": "✅ 真实触达并同步状态",
+                                    "接口返回": str(ctrl_res)
+                                })
+                                success_count += 1
+                            else:
+                                err_msg = ctrl_res.get("msg", "硬件响应异常") if isinstance(ctrl_res, dict) else "硬件响应异常"
+                                exec_details.append({
+                                    "大棚": gh_name,
+                                    "对象": current_name,
+                                    "动作": action_text,
+                                    "目标状态": target_switcher_val,
+                                    "设备编号": device_no,
+                                    "传感器ID": sensor_id,
+                                    "执行结果": f"❌ {err_msg}",
+                                    "接口返回": str(ctrl_res)
                                 })
                                 fail_count += 1
+                        except Exception as e:
+                            exec_details.append({
+                                "大棚": gh_name,
+                                "对象": current_name,
+                                "动作": action_text,
+                                "目标状态": target_switcher_val,
+                                "设备编号": device_no,
+                                "传感器ID": sensor_id,
+                                "执行结果": f"⚠️ API请求失败: {e}",
+                                "接口返回": ""
+                            })
+                            fail_count += 1
                                 
     return success_count, fail_count, skip_count, exec_details

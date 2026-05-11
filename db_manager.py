@@ -41,7 +41,21 @@ def init_db():
                     UNIQUE KEY uk_gh_metric (target_gh, metric_name)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')
-            
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS alert_state (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    target_gh VARCHAR(100) NOT NULL,
+                    metric_name VARCHAR(50) NOT NULL,
+                    is_active TINYINT DEFAULT 0,
+                    last_status VARCHAR(20),
+                    last_alert_time DATETIME,
+                    last_recovery_time DATETIME,
+                    last_value VARCHAR(255),
+                    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_alert_state (target_gh, metric_name)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ''')
             # 2. 创建农事工单记录表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS work_orders (
@@ -135,7 +149,35 @@ def init_db():
                     camera_name VARCHAR(100)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''') 
-                 
+
+            # 兼容旧版本 work_orders 表结构
+            cursor.execute("""
+                SELECT COLUMN_NAME
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'work_orders'
+            """, (TIDB_CONFIG["database"],))
+            work_order_columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
+
+            if "batch_id" not in work_order_columns:
+                cursor.execute("ALTER TABLE work_orders ADD COLUMN batch_id INT NULL")
+            if "duration_mins" not in work_order_columns:
+                cursor.execute("ALTER TABLE work_orders ADD COLUMN duration_mins INT NULL")
+
+            cursor.execute("""
+                SELECT INDEX_NAME
+                FROM information_schema.STATISTICS
+                WHERE TABLE_SCHEMA = %s
+                  AND TABLE_NAME = 'work_orders'
+                  AND INDEX_NAME = 'idx_work_orders_batch_id'
+            """, (TIDB_CONFIG["database"],))
+            if not cursor.fetchone():
+                try:
+                    cursor.execute("CREATE INDEX idx_work_orders_batch_id ON work_orders(batch_id)")
+                except Exception as e:
+                    err_text = str(e).lower()
+                    if "index already exist" not in err_text and "add the same index" not in err_text:
+                        raise
+
         conn.commit()
         print("✅ TiDB 云端数据库初始化成功，所有表结构已同步")
     except Exception as e:

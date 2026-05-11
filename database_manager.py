@@ -6,7 +6,6 @@ import pandas as pd
 import time
 
 # local SQLite database
-
 def init_db():
     """初始化数据库并自动建表"""
     conn = sqlite3.connect(DB_NAME)

@@ -9,7 +9,7 @@ import plotly.graph_objects as got
 
 from sheduler import device_info_get
 from config import *
-import database_manager 
+# import database_manager 
 import db_manager
 
 
@@ -18,15 +18,15 @@ from utils.login import check_password
 from utils.text_operate import extract_gh_num,get_sorted_devices,parse_zone,process_history_records
 from utils.alter import user_webhook_check
 from utils.style import load_local_css,generate_sensor_card_html
-from utils.controllers import handle_toggle_change, execute_batch_control
+from utils.controllers import DEBUG_MODE, handle_toggle_change, execute_batch_control
 from utils.iot_client import IotClient
+from utils.page import get_device_status_meta, sensor_display_value, sensor_pretty_name, sensor_accent_color, save_binding_work_order, render_greenhouse_selector_cards, render_binding_form, render_greenhouse_sandbox
 from datetime import datetime
 
 
 
 bg_path = "imgs/bg1.png"
 json_path="./users.json"
-
 
 # === login ===
 # if not check_password(bg_path,json_path):
@@ -40,18 +40,25 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'device_data' not in st.session_state:
     st.session_state.device_data = [] # 存放拉取的真实设备数据
+if 'menu_target' not in st.session_state:
+    st.session_state.menu_target = "🌐 设备整体状态"
 
 # ==================== 3. 侧边栏导航 ====================
 with st.sidebar:
     st.title("🌿 智慧温室 IoT 平台")
     # 页面路由菜单
-    menu = st.radio("🏠 业务导航", [
+    menu_options = [
         "🌐 设备整体状态", 
-        # "🎮 单棚孪生与控制 (管细节)", 
-        "📈 多维数据分析 (查根因)", 
-        "📋 批次工单与联控 (抓生产)",
-        "⚙️ 策略与预警 (设规则)"
-    ])
+        "🎮 单棚设备沙盘",
+        "📈 多维数据分析", 
+        "📋 批次工单与联控",
+        "⚙️ 策略与预警"
+    ]
+    default_menu = st.session_state.get("menu_target", "🌐 设备整体状态")
+    if default_menu not in menu_options:
+        default_menu = "🌐 设备整体状态"
+    menu = st.radio("🏠 业务导航", menu_options, index=menu_options.index(default_menu))
+    st.session_state["menu_target"] = menu
 
     data = device_info_get() 
     st.session_state.device_data = data.get("dataList", [])
@@ -60,35 +67,30 @@ with st.sidebar:
         st.session_state.logged_in = False
         st.rerun()
 
-# if not st.session_state.device_data:
-#     st.warning("👈 请点击左侧【同步云端最新数据】拉取平台台账。")
-
-# ==================== 4. 核心业务页面 ====================
-
 # ----------------- 页面一：全局驾驶舱 -----------------
 if menu == "🌐 设备整体状态":
     st.header("设备情况")
     init_weather_alert_config()
     config = st.session_state.weather_alert_config
+
+    if "selected_greenhouse" not in st.session_state:
+        st.session_state["selected_greenhouse"] = None
+    if "pending_control_binding" not in st.session_state:
+        st.session_state["pending_control_binding"] = None
     # 获取天气信息
     if st.session_state.device_data:
         first_device = st.session_state.device_data[0]
         lat = first_device.get('lat')
         lng = first_device.get('lng')
-        
         weather_info = get_weather_amap(lat, lng, WEATHER_API_KEY)
         if weather_info:
-            # 1. 获取预警结果
             alert_level, alert_msg = get_weather_alert(weather_info, config)
-            # 2. 拼接横幅文本
-            city = weather_info.get('location', '未知地区').split('省')[-1] # 简化名字
+            city = weather_info.get('location', '未知地区').split('省')[-1]
             weather = weather_info.get('weather', '未知')
             temp = weather_info.get('temperature', '--')
             humidity = weather_info.get('humidity', '--')
             wind_power = weather_info.get('wind_power', '--')
-            # 基础文本
             banner_text = f"🌤️ {city} 当前天气：{weather} | 温度 {temp}℃ 湿度 {humidity}% 风力 {wind_power}级"
-            # 3. 动态渲染横幅 (根据预警级别变色)
             if alert_level == "error":
                 st.error(f"{banner_text} | 🚨 **报警**：{alert_msg}")
             elif alert_level == "warning":
@@ -96,7 +98,6 @@ if menu == "🌐 设备整体状态":
             else:
                 st.info(f"{banner_text} | ✅ 暂无天气预警信息")
 
-    # ==================== 可折叠的天气预警设置 ====================
     with st.expander("⚙️ 天气预警参数设置 (点击展开/收起)", expanded=False):
         with st.form("weather_alert_form"):
             st.caption("调整阈值后点击保存，上方天气横幅将实时刷新预警状态。")
@@ -105,24 +106,16 @@ if menu == "🌐 设备整体状态":
                 st.markdown("#### 🌡️ 温度预警")
                 new_temp_high = st.number_input("高温预警阈值 (℃)", min_value=20, max_value=50, value=config['temp_high'])
                 new_temp_low = st.number_input("低温预警阈值 (℃)", min_value=-20, max_value=20, value=config['temp_low'])
-                
                 st.markdown("#### 💨 风力预警")
                 new_wind = st.number_input("大风预警阈值 (级)", min_value=1, max_value=12, value=config['wind_power'])
-                
             with col2:
                 st.markdown("#### 💧 湿度预警")
                 new_hum_high = st.number_input("高湿预警阈值 (%)", min_value=50, max_value=100, value=config['humidity_high'])
                 new_hum_low = st.number_input("低湿预警阈值 (%)", min_value=0, max_value=50, value=config['humidity_low'])
-                
                 st.markdown("#### 🔔 预警开关")
-                # st.form 中不支持 toggle，所以用 checkbox 替代
                 new_enable = st.checkbox("启用天气预警", value=config['enable_alerts'])
-
-            # 提交按钮
-            submit_btn = st.form_submit_button("💾 保存配置", type="primary", width = 'stretch')
-            
+            submit_btn = st.form_submit_button("💾 保存配置", type="primary", width='stretch')
             if submit_btn:
-                # 将用户输入的新值覆盖到 session_state 中
                 st.session_state.weather_alert_config.update({
                     'temp_high': new_temp_high,
                     'temp_low': new_temp_low,
@@ -131,168 +124,40 @@ if menu == "🌐 设备整体状态":
                     'humidity_low': new_hum_low,
                     'enable_alerts': new_enable
                 })
-                # 提示成功并刷新页面以更新上方横幅
                 st.toast("✅ 天气预警规则已保存！")
                 st.rerun()
-    st.subheader("设备地图状态")
+
     if st.session_state.device_data:
-        # 1. 提前统计三种状态的数量
-        normal_cnt = sum(1 for d in st.session_state.device_data if d.get('isLine', 0) != 0 and d.get('isAlarms', 0) == 0)
-        offline_cnt = sum(1 for d in st.session_state.device_data if d.get('isLine', 0) == 0)
-        alarm_cnt = sum(1 for d in st.session_state.device_data if d.get('isLine', 0) != 0 and d.get('isAlarms', 0) == 1)
-
-        fig = go.Figure()
-
-        status_configs = [
-            {"name": f"正常 ({normal_cnt})", "color": "#00CC96", "condition": lambda d: d.get('isLine',0) != 0 and d.get('isAlarms',0) == 0},
-            {"name": f"报警 ({alarm_cnt})", "color": "#EF553B", "condition": lambda d: d.get('isLine',0) != 0 and d.get('isAlarms',0) == 1},
-            {"name": f"离线 ({offline_cnt})", "color": "#FFA15A", "condition": lambda d: d.get('isLine',0) == 0}
-        ]
-        # 4. 遍历配置，分别添加图层 (Trace)
-        for config in status_configs:
-            lats = []
-            lngs = []
-            texts = []
-            
-            for idx, d in enumerate(st.session_state.device_data):
-                if config["condition"](d):
-                    base_lat = float(d.get('lat', 36.73291))
-                    base_lng = float(d.get('lng', 101.74776))
-                    # 微小网格偏移（防止坐标完全相同导致重叠）
-                    offset_lat = base_lat + ((idx // 3) - 1) * 0.00015  
-                    offset_lng = base_lng + ((idx % 3) - 1) * 0.00015
-                    
-                    lats.append(offset_lat)
-                    lngs.append(offset_lng)
-                    
-                    # 自定义鼠标悬浮提示的文本
-                    status_str = config['name'].split(' ')[0]
-                    texts.append(f"<b>{d.get('deviceName', f'设备{idx}')}</b><br>状态: {status_str}")
-            fig.add_trace(go.Scattermap(
-                lat=lats,
-                lon=lngs,
-                mode='markers',
-                marker=dict(size=14, color=config["color"]), # 这里直接用 dict 写法更简洁，不易报错
-                name=config["name"], 
-                hoverinfo="text",
-                text=texts,
-                showlegend=True 
-            ))
-        # 5. 获取地图初始中心点
-        center_lat = float(st.session_state.device_data[0].get('lat', 36.73291))
-        center_lng = float(st.session_state.device_data[0].get('lng', 101.74776))
-
-        # 6. 配置地图底图和图例位置
-        fig.update_layout(
-            map_style="open-street-map",
-            map=dict(
-                center=dict(lat=center_lat, lon=center_lng),
-                zoom=12
-            ),
-            margin={"r":0,"t":0,"l":0,"b":0},
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.98,
-                xanchor="left",
-                x=0.02,
-                bgcolor="rgba(255, 255, 255, 0.9)", # 白色半透明背景，防止与地图重叠看不清
-                bordercolor="#ccc",
-                borderwidth=1,
-                font=dict(size=14, color="#333")
-            ),
-            height=400
-        )
-        
-        st.plotly_chart(fig, width = 'stretch')
-
+        render_greenhouse_selector_cards(st.session_state.device_data)
+        sorted_device_names = sorted([d['deviceName'] for d in st.session_state.device_data], key=extract_gh_num)
+        if st.session_state.get("selected_greenhouse") not in sorted_device_names:
+            st.session_state["selected_greenhouse"] = sorted_device_names[0]
+        current_gh = st.session_state["selected_greenhouse"]
     else:
         st.info("暂无设备坐标数据")
 
-    # ==================== 【需求2】联动查看单设备传感器详情 ====================
-    st.subheader("🔍 设备传感器详细看板")
-    st.caption("选择大棚，查看其挂载的所有实时传感器数据。")
-    
-    device_names = [d['deviceName'] for d in st.session_state.device_data]
-    sorted_device_names = sorted(device_names, key=extract_gh_num)
-    
-    col_1, col_2 = st.columns(2)
-    with col_1:
-        selected_gh = st.selectbox("🏠 选择要查看的大棚", sorted_device_names)
-    with col_2:
-        # 数值类型 1 开关类型 2
-        selected_type_label = st.selectbox("🔍 选择传感器类型", ["数值","开关"])
-        
-    selected_type_flag = 1 if selected_type_label == "数值" else 2
-    
-    target_device = next(d for d in st.session_state.device_data if d['deviceName'] == selected_gh)
-    sensors_list = target_device.get("sensorsList", [])
-    device_no = target_device.get("deviceNo")
-    is_online = target_device.get('isLine', False) # 设备是否在线
-    
-    if not sensors_list:
-        st.info(f"暂未获取到 {selected_gh} 的传感器数据 (sensorsList 为 null)。")
-    else:
-        env_sensors = [s for s in sensors_list if s.get('sensorTypeId') == selected_type_flag and \
-            (s.get('sensorTypeId') != 1 or s.get("value") not in ['0', '0.0', ]
-    )]
-        
-        if env_sensors:
-            load_local_css("assets/style.css")
-            if selected_type_flag  == 2: 
-                cols = st.columns(3)
-                if st.session_state.get("api_client") is None:
-                    client = IotClient()
-                    login_res = client.login(USERNAME, PASSWORD, API_KEY)
-                    print("🔐 正在登录...")
-                    if login_res.get("flag") != "00":
-                        print("❌ 登录失败:")
-                    else:
-                        token_res = client.get_access_token(USERNAME, PASSWORD)
-                        if token_res.get("flag") != "00":
-                            print("❌ 获取访问令牌失败:")
-                        else:
-                            print("✅ 获取访问令牌成功！可以下发控制指令了！")
-                            st.session_state["api_client"] = client
-                client = st.session_state.get("api_client")
-                for idx, sensor in enumerate(env_sensors):
-                    s_name = sensor.get("sensorName", "未知")
-                    sensor_id = sensor.get("id")
-                    s_time = sensor.get("updateDate", "未知时间")
-                    is_on = str(sensor.get("switcher")) == "1" or str(sensor.get("value")) == "1"
-                    with cols[idx % 3]:
-                        with st.container(border=True):
-                            toggle_key = f"ctrl_toggle_{device_no}_{sensor_id}"
-                            
-                            st.toggle(
-                                label=s_name,  
-                                value=is_on,         # 当前开关滑块的位置
-                                key=toggle_key, # 确保页面 key 唯一
-                                disabled=not is_online, # 如果大棚整体掉线，直接禁用按钮防误触
-                                on_change=handle_toggle_change, 
-                                args=(client,target_device.get("deviceName"), device_no, sensor_id,  s_name,sensor,toggle_key)
-                            )
-                            st.caption(f"📅 ：{s_time}")
-                            st.caption(f"ID：{sensor_id}")         
-            else:
-                # 只读卡片排 4 列
-                cols = st.columns(4)
-                # components.generate_sensor_card_html assumed available
-                for idx, sensor in enumerate(env_sensors):
-                    s_name = sensor.get("sensorName", "未知")
-                    s_unit = sensor.get("unit", "")
-                    s_time = sensor.get("updateDate", "未知时间")
-                    s_id = sensor.get("id", "未知ID")
-                    # 数值型显示
-                    s_val = sensor.get("value", "--")
-                    val_color_style = "color: #1f77b4;" # 默认蓝色数值颜色
-                    
-                    with cols[idx % 4]:
-                        card_html = generate_sensor_card_html(s_name, val_color_style, s_val, s_unit, s_time, s_id)
-                        st.markdown(card_html, unsafe_allow_html=True)
-        else:
-            mode_desc = "可控制" if selected_type_label == "🎮 控制面板" else "有效监测"
-            st.warning(f"该设备下没有【{selected_type_label}】类型的{mode_desc}设备。")
+    active_batch_labels = []
+    batch_lookup = {}
+    if st.session_state.device_data:
+        try:
+            conn = db_manager.get_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT batch_id, gh_name, crop_name, variety
+                    FROM batches
+                    WHERE status = 1
+                    ORDER BY start_time DESC
+                """)
+                active_batches_data = cursor.fetchall()
+            conn.close()
+            active_batch_labels = [
+                f"ID:{b['batch_id']} | {b['gh_name']} - {b['crop_name']} ({(b.get('variety') or '未填写品种').strip()})"
+                for b in active_batches_data
+            ]
+            batch_lookup = {label: batch for label, batch in zip(active_batch_labels, active_batches_data)}
+        except Exception as e:
+            st.warning(f"联动工单批次加载失败: {e}")
+
     st.subheader("📊 跨棚数据对比")
     st.caption("选择传感器，从数据库拉取历史数据绘制趋势对比曲线。")
     valid_metric_names = set()
@@ -301,21 +166,20 @@ if menu == "🌐 设备整体状态":
         for s in sensors_list:
             if s.get('sensorTypeId') == 1 and str(s.get("value")) not in ['0', '0.0']:
                 valid_metric_names.add(s.get("sensorName"))
-                
+
     metric_opts = sorted(list(valid_metric_names))
     col_m1, col_m2 = st.columns([2, 1])
-    
+
     if not metric_opts:
         st.info("当前设备未挂载有效的环境传感器数据。")
     else:
         with col_m1:
             selected_metric = st.selectbox("🎯 选择对比指标", metric_opts)
         with col_m2:
-            # 增加时间维度筛选
             time_range = st.selectbox(
-                "🕒 时间范围", 
+                "🕒 时间范围",
                 ["当前1小时", "今日", "最近一周", "最近一月"],
-                index=1  # 默认选择“今日”
+                index=1
             )
         now = datetime.now()
         if time_range == "当前1小时":
@@ -324,32 +188,25 @@ if menu == "🌐 设备整体状态":
             start_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
         elif time_range == "最近一周":
             start_time = now - timedelta(days=7)
-        else:  # 最近一月
+        else:
             start_time = now - timedelta(days=30)
 
         st.caption(f"📅 统计范围：{start_time.strftime('%Y-%m-%d %H:%M:%S')} 至 现在")
         line_chart_data = []
         with st.spinner("正在从数据库拉取历史时序数据..."):
-            # 方式 1 本地数据库查询（推荐，效率更高）
-            import database_manager # 确保引入了你的数据库模块
-            # 方式 2 从 在线数据库中查找
+            import database_manager
             import db_manager
             for d in st.session_state.device_data:
                 gh_name = d.get("deviceName", "未知大棚")
                 sensors_list = d.get('sensorsList') or []
-                
-                # 精确匹配传感器名称，获取其专属 ID
                 target_sensor = next((s for s in sensors_list if s.get("sensorName") == selected_metric), None)
                 if target_sensor:
                     sensor_id = target_sensor.get("id")
-                    # 依据 sensor_id 查询数据库中的历史记录
-                    # history_records = database_manager.get_sensor_history(sensor_id, start_str, end_str)
                     history_records = db_manager.get_sensor_history_tidb(sensor_id, start_time, now)
-                    
                     for record in history_records:
                         line_chart_data.append({
                             "温室名称": gh_name,
-                            "采集时间": record["add_time"], # 数据库返回的字段
+                            "采集时间": record["add_time"],
                             "数值": float(record["value"]),
                             "单位": target_sensor.get("unit")
                         })
@@ -358,28 +215,21 @@ if menu == "🌐 设备整体状态":
             df_plot["采集时间"] = pd.to_datetime(df_plot["采集时间"])
             df_plot["数值"] = pd.to_numeric(df_plot["数值"], errors='coerce')
             unit_str = line_chart_data[0].get("单位", "")
-
-            # 1. 自动日期探测
             now = datetime.now()
             actual_min_date = df_plot["采集时间"].min().date()
             actual_max_date = df_plot["采集时间"].max().date()
-            # 计算数据实际跨越的天数
             date_span = (actual_max_date - actual_min_date).days
-
             days_map = {"最近一周": 7, "最近一月": 30}
             if time_range in days_map:
                 theory_start = (now - timedelta(days=days_map[time_range])).date()
                 if actual_min_date > theory_start:
                     st.info(f"💡 数据库最早记录为 **{actual_min_date}**，已为您展示至今趋势。")
-                # --- 2. 核心：智能频率判断 ---
                 if date_span < 1:
-                    # 💡 逻辑修正：如果实际数据不足 2 天，按“小时”聚合，防止出现“糖葫芦”点图
-                    sample_rule = '1h' 
+                    sample_rule = '1h'
                     x_col = "采集时间"
                     is_category = False
                     axis_format = "%m-%d %H:%M"
                 else:
-                    # 正常跨天数据，按“天”聚合
                     sample_rule = '1d'
                     x_col = "日期标签"
                     is_category = True
@@ -392,19 +242,15 @@ if menu == "🌐 设备整体状态":
                         resampled["日期标签"] = resampled["采集时间"].dt.strftime('%m-%d')
                     resampled["温室名称"] = gh
                     final_df_list.append(resampled)
-                
                 df_curve = pd.concat(final_df_list).dropna(subset=["数值"])
                 df_curve = df_curve.sort_values("采集时间")
             else:
-                # 当前1小时/今日：原始精度
                 df_curve = df_plot.copy().sort_values("采集时间")
                 x_col = "采集时间"
                 is_category = False
                 axis_format = "%H:%M"
 
-            # --- 3. 渲染图表 ---
             if not df_curve.empty:
-                
                 sorted_gh_names = sorted(df_curve["温室名称"].unique(), key=extract_gh_num)
                 fig_curve = px.line(
                     df_curve, x=x_col, y="数值", color="温室名称",
@@ -416,65 +262,75 @@ if menu == "🌐 设备整体状态":
                     fig_curve.update_xaxes(type='category', categoryorder='category ascending')
                 else:
                     fig_curve.update_xaxes(tickformat=axis_format)
-
                 fig_curve.update_layout(
-                    xaxis_title="", 
+                    xaxis_title="",
                     yaxis_title=f"数值 ({unit_str})" if unit_str else "数值",
                     hovermode="x unified",
                     margin=dict(l=20, r=20, t=40, b=20)
                 )
-                
-                fig_curve.update_traces(hovertemplate='%{y:.2f}') 
+                fig_curve.update_traces(hovertemplate='%{y:.2f}')
                 st.plotly_chart(fig_curve, width='stretch')
 
-# ----------------- 页面二：单棚孪生与控制 -----------------
-# elif menu == "🎮 单棚孪生与控制 (管细节)":
-#     st.header("🎮 单棚详情与操控")
-#     device_names = [d['deviceName'] for d in st.session_state.device_data]
-#     selected_gh = st.selectbox("目标大棚切换", device_names)
-#     target_device = next(d for d in st.session_state.device_data if d['deviceName'] == selected_gh)
-#     sensors = target_device.get('sensorsList', [])
-    
-#     col_view, col_ctrl = st.columns([2, 1])
-    
-#     with col_view:
-#         # 【需求7】摄像头
-#         st.subheader("📹 视频流与 3D 孪生")
-#         st.video("https://www.w3schools.com/html/mov_bbb.mp4") # 占位
-#         # 【需求2】实物建模
-#         st.info("💡 3D 沙盘区域：此处通过 iframe 嵌入 Three.js 渲染的模型网页。")
-        
-#         # st.subheader("📟 实时环境数据")
-#         # m_col1, m_col2, m_col3 = st.columns(3)
-#         # temp, tu = get_sensor_info(sensors, "1号空温")
-#         # hum, hu = get_sensor_info(sensors, "1号空湿")
-#         # m_col1.metric("空气温度", f"{temp} {tu}")
-#         # m_col2.metric("空气湿度", f"{hum} {hu}")
-#     # TODO 这个也是正常的，但是需要美化修改
-#     with col_ctrl:
-#         # 【需求5】单设备操控
-#         st.subheader("🎛️ 控制面板")
-#         st.caption(f"当前在线状态: {'✅' if target_device.get('isLine') else '❌'}")
-#         for s in sensors:
-#             if s.get("sensorTypeId") == 2: # 控制类设备
-#                 name = s.get("sensorName")
-#                 state = (s.get("value") == "1")
-#                 # Streamlit toggle 按钮
-#                 toggled = st.toggle(f"🔌 {name}", value=state, key=f"sw_{s.get('id')}")
-#                 # 【需求11】联动农事绑定 (核心逻辑体现)
-#                 if toggled and not state: # 刚被打开
-#                     if "雾化" in name:
-#                         with st.expander("📝 记录：降温加湿工单 (系统检测到雾化开启)", expanded=True):
-#                             st.text_input("操作员", "admin")
-#                             st.number_input("预计开启时长(分钟)", min_value=1, value=30)
-#                             st.button("提交记录", key=f"btn_{s.get('id')}")
-#                     elif "卷被" in name or "卷膜" in name:
-#                         with st.expander("📝 记录：通风保温工单 (系统检测到卷膜动作)", expanded=True):
-#                             st.selectbox("操作意图", ["早晨见光", "夜间保温", "强风收拢"])
-#                             st.button("提交记录", key=f"btn_{s.get('id')}")
+        render_binding_form(active_batch_labels, batch_lookup)
+
+# ----------------- 页面二：单棚设备沙盘 -----------------
+elif menu == "🎮 单棚设备沙盘":
+    st.header("🎮 单棚设备沙盘")
+    st.caption("查看单个温室的设备沙盘、实时数据和控制面板。")
+
+    if not st.session_state.device_data:
+        st.info("暂无设备数据，请先同步设备台账。")
+    else:
+        if "selected_greenhouse" not in st.session_state or st.session_state["selected_greenhouse"] is None:
+            sorted_device_names = sorted([d['deviceName'] for d in st.session_state.device_data], key=extract_gh_num)
+            st.session_state["selected_greenhouse"] = sorted_device_names[0]
+
+        sorted_device_names = sorted([d['deviceName'] for d in st.session_state.device_data], key=extract_gh_num)
+        if st.session_state["selected_greenhouse"] not in sorted_device_names:
+            st.session_state["selected_greenhouse"] = sorted_device_names[0]
+
+        top_cols = st.columns([2, 1])
+        with top_cols[0]:
+            selected_gh = st.selectbox(
+                "🏠 选择目标温室",
+                sorted_device_names,
+                index=sorted_device_names.index(st.session_state["selected_greenhouse"]),
+                key="sandbox_page_selected_gh"
+            )
+            st.session_state["selected_greenhouse"] = selected_gh
+        with top_cols[1]:
+            if st.button("⬅️ 返回地图总览", use_container_width=True, key="back_to_dashboard"):
+                st.session_state["menu_target"] = "🌐 设备整体状态"
+                st.rerun()
+
+        target_device = next(d for d in st.session_state.device_data if d['deviceName'] == st.session_state["selected_greenhouse"])
+        render_greenhouse_sandbox(target_device)
+
+        active_batch_labels = []
+        batch_lookup = {}
+        try:
+            conn = db_manager.get_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT batch_id, gh_name, crop_name, variety
+                    FROM batches
+                    WHERE status = 1
+                    ORDER BY start_time DESC
+                """)
+                active_batches_data = cursor.fetchall()
+            conn.close()
+            active_batch_labels = [
+                f"ID:{b['batch_id']} | {b['gh_name']} - {b['crop_name']} ({(b.get('variety') or '未填写品种').strip()})"
+                for b in active_batches_data
+            ]
+            batch_lookup = {label: batch for label, batch in zip(active_batch_labels, active_batches_data)}
+        except Exception as e:
+            st.warning(f"联动工单批次加载失败: {e}")
+
+        render_binding_form(active_batch_labels, batch_lookup)
 
 # ----------------- 页面三：多维数据分析 -----------------
-elif menu == "📈 多维数据分析 (查根因)":
+elif menu == "📈 多维数据分析":
     st.header("📈 多维数据分析看板")
     st.caption("基于平台全量实时数据与历史数据，进行深度农业参数分析。")
     
@@ -883,238 +739,847 @@ elif menu == "📈 多维数据分析 (查根因)":
                             mime="text/csv"
                         )
 
-
 # ----------------- 页面四：批次工单与联控 -----------------
-elif menu == "📋 批次工单与联控 (抓生产)":
-    st.header("📋 批量生产与批次管理")
-    
-    col1, col2 = st.columns(2, gap="large")
-    with col1:
-        # ================= 【需求6】多设备联控 =================
-        st.subheader("🚀 多设备一键联控")
-        st.caption("勾选多个目标，系统将自动识别可控硬件并并发下发指令。")
-        online_devices = [d['deviceName'] for d in st.session_state.device_data if d.get('isLine') == 1]
-        
-        if not online_devices:
-            st.error("当前无在线设备可控！")
+elif menu == "📋 批次工单与联控":
+    db_manager.init_db()
+    st.header("📋 批次工单与联控")
+    st.caption("围绕种植批次、标准工单和多棚联控形成可追溯的生产闭环。")
+
+    stage_options = ["播种期", "出苗期/缓苗期", "生长期/莲座期", "结球期/挂果期", "采收期"]
+    task_options = ["🌱 播种与定植", "💧 智能灌溉", "💊 水肥一体化施肥", "✂️ 打叶与采收", "🌀 强制通风", "🤖 联控执行"]
+    bucket_options = {"1小时": "1h", "6小时": "6h", "1天": "1d"}
+
+    def normalize_dt(value):
+        if value in (None, "", "None"):
+            return None
+        try:
+            if pd.isna(value):
+                return None
+        except Exception:
+            pass
+        return pd.to_datetime(value).to_pydatetime()
+
+    def normalize_work_order_finish_time(value):
+        return normalize_dt(value)
+
+    def format_date(value, with_time=False):
+        dt_value = normalize_dt(value)
+        if not dt_value:
+            return "未设置"
+        return dt_value.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
+
+    def as_date_input_value(value, fallback=None):
+        dt_value = normalize_dt(value)
+        if dt_value:
+            return dt_value.date()
+        return fallback or datetime.now().date()
+
+    def format_duration_value(duration_mins):
+        if duration_mins in (None, "", "None"):
+            return "-"
+        try:
+            if pd.isna(duration_mins):
+                return "-"
+        except Exception:
+            pass
+        return str(int(duration_mins))
+
+    def get_work_order_time_window(order):
+        finish_time = normalize_work_order_finish_time(order.get("created_at"))
+        duration_text = format_duration_value(order.get("duration_mins"))
+        if duration_text == "-":
+            return finish_time, None
+        duration_mins = int(duration_text)
+        start_time = finish_time - timedelta(minutes=duration_mins) if finish_time else None
+        return start_time, finish_time
+
+    def format_batch_label(batch):
+        variety = (batch.get("variety") or "未填写品种").strip()
+        return f"ID:{batch['batch_id']} | {batch['gh_name']} - {batch['crop_name']} ({variety})"
+
+    def stage_index(stage_name):
+        if stage_name in stage_options:
+            return stage_options.index(stage_name)
+        return 0
+
+    def apply_growth_stage_overlay(fig, crop_name, start_date, end_date):
+        runtime_days = max(0, (end_date - start_date).days)
+
+        def add_stage_band(x0, x1, color, text, opacity=0.1):
+            band_end = min(x1, end_date)
+            if band_end <= x0:
+                return
+            fig.add_vrect(
+                x0=x0,
+                x1=band_end,
+                fillcolor=color,
+                opacity=opacity,
+                line_width=0,
+                annotation_text=text
+            )
+
+        if "生菜" in crop_name:
+            add_stage_band(start_date, start_date + timedelta(days=7), "green", "🌱 缓苗期")
+            add_stage_band(start_date + timedelta(days=7), start_date + timedelta(days=25), "yellow", "🌿 莲座期")
+            add_stage_band(start_date + timedelta(days=25), end_date, "orange", "🥬 结球期")
+        elif "番茄" in crop_name:
+            add_stage_band(start_date, start_date + timedelta(days=15), "green", "🌱 苗期")
+            add_stage_band(start_date + timedelta(days=15), start_date + timedelta(days=40), "yellow", "🌼 开花坐果期")
+            add_stage_band(start_date + timedelta(days=40), end_date, "red", "🍅 结果膨大期", opacity=0.05)
         else:
-            target_ghs = st.multiselect("1. 勾选需要联控的在线温室", online_devices, default=online_devices[0:1] if online_devices else None)
+            add_stage_band(start_date, end_date, "blue", f"📊 生长期 ({runtime_days}天)", opacity=0.05)
 
-            switch_names = set()
-            for d in st.session_state.device_data:
-                if d.get('deviceName') in target_ghs:
-                    sensors = d.get('sensorsList') or []
-                    for s in sensors:
-                        if s.get('sensorTypeId') == 2:
-                            name = s.get("sensorName")
-                            if name:switch_names.add(name)
-            action_options = []
-            if switch_names:
-                for name in sorted(list(switch_names)):
-                    action_options.append(f"🟢 打开所有 {name}")
-                    action_options.append(f"🔴 关闭所有 {name}")
-            else:
-                action_options = ["⚠️ 选中的大棚暂无可控设备"]
+    def load_batch_page_data():
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT
+                        b.*,
+                        COALESCE(w.order_count, 0) AS work_order_count,
+                        w.last_work_order_at
+                    FROM batches b
+                    LEFT JOIN (
+                        SELECT
+                            batch_id,
+                            COUNT(*) AS order_count,
+                            MAX(created_at) AS last_work_order_at
+                        FROM work_orders
+                        GROUP BY batch_id
+                    ) w ON w.batch_id = b.batch_id
+                    ORDER BY b.status DESC, b.start_time DESC
+                """)
+                batches = cursor.fetchall()
+                cursor.execute("""
+                    SELECT
+                        w.*,
+                        b.crop_name,
+                        b.variety,
+                        b.current_stage
+                    FROM work_orders w
+                    LEFT JOIN batches b ON b.batch_id = w.batch_id
+                    ORDER BY w.created_at DESC
+                    LIMIT 500
+                """)
+                orders = cursor.fetchall()
+            return batches, orders
+        finally:
+            conn.close()
 
-            action = st.selectbox("2. 自动识别并选择统一执行的动作", action_options)
-            if st.button("🚀 下发联控指令", type="primary", width='stretch'):
-                if not target_ghs:
-                    st.warning("请至少选择一个温室！")
-                elif "⚠️" in action:
-                    st.error("当前无有效指令可下发。")
-                else:
-                        if st.session_state.get("api_client") is None:
+    def load_greenhouse_sensor_options(gh_name):
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT DISTINCT
+                        s.sensor_name,
+                        COALESCE(s.unit, '') AS unit
+                    FROM sensors s
+                    JOIN devices d ON s.device_id = d.device_id
+                    WHERE d.gh_name = %s
+                      AND s.sensor_type_id = 1
+                      AND COALESCE(s.is_delete, 0) = 0
+                    ORDER BY
+                        CASE
+                            WHEN s.sensor_name LIKE '%%温度%%' OR s.sensor_name LIKE '%%空温%%' THEN 0
+                            WHEN s.sensor_name LIKE '%%湿度%%' THEN 1
+                            ELSE 2
+                        END,
+                        s.sensor_name
+                """, (gh_name,))
+                return cursor.fetchall()
+        finally:
+            conn.close()
+
+    def load_batch_history(gh_name, sensor_name, start_time, bucket_rule):
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT sh.add_time, sh.value
+                    FROM sensor_history sh
+                    JOIN sensors s ON sh.sensor_id = s.sensor_id
+                    JOIN devices d ON s.device_id = d.device_id
+                    WHERE d.gh_name = %s
+                      AND s.sensor_name = %s
+                      AND sh.add_time >= %s
+                    ORDER BY sh.add_time ASC
+                """, (gh_name, sensor_name, start_time))
+                rows = cursor.fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return pd.DataFrame()
+
+        df_history = pd.DataFrame(rows)
+        df_history["value"] = pd.to_numeric(df_history["value"], errors="coerce")
+        df_history["add_time"] = pd.to_datetime(df_history["add_time"])
+        df_history = df_history.dropna(subset=["value"])
+        if df_history.empty:
+            return df_history
+
+        df_history["bucket_time"] = df_history["add_time"].dt.floor(bucket_rule)
+        return df_history.groupby("bucket_time", as_index=False)["value"].mean()
+
+    def save_work_order_records(records):
+        if not records:
+            return 0
+        finish_time = datetime.now().replace(microsecond=0)
+        records_with_finish_time = [tuple(record) + (finish_time,) for record in records]
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.executemany("""
+                    INSERT INTO work_orders (batch_id, gh_name, task_type, operator, content, duration_mins, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, records_with_finish_time)
+            conn.commit()
+            return len(records)
+        finally:
+            conn.close()
+
+    def delete_batch_with_orders(batch_id, delete_orders=False):
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                if delete_orders:
+                    cursor.execute("DELETE FROM work_orders WHERE batch_id = %s", (batch_id,))
+                cursor.execute("DELETE FROM batches WHERE batch_id = %s", (batch_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def delete_work_order(order_id):
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM work_orders WHERE id = %s", (order_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def bulk_delete_test_data(delete_finished_batches=False, delete_all_orders=False):
+        conn = db_manager.get_connection()
+        try:
+            with conn.cursor() as cursor:
+                if delete_all_orders:
+                    cursor.execute("DELETE FROM work_orders")
+                if delete_finished_batches:
+                    cursor.execute("DELETE FROM work_orders WHERE batch_id IN (SELECT batch_id FROM batches WHERE status = 0)")
+                    cursor.execute("DELETE FROM batches WHERE status = 0")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def archive_control_orders(target_ghs, action_label, operator_name, note_text, details_log, running_batches):
+        archive_records = []
+        archived_ghs = []
+        for batch in running_batches:
+            gh_name = batch["gh_name"]
+            if gh_name not in target_ghs:
+                continue
+            gh_logs = [
+                f"{row.get('对象', '未知对象')} {row.get('动作', '')} -> {row.get('执行结果', '')}"
+                for row in details_log
+                if row.get("大棚") == gh_name
+            ]
+            if not gh_logs:
+                continue
+            content_parts = [
+                f"联控动作：{action_label}",
+                f"目标温室：{gh_name}",
+                f"附加说明：{note_text or '无'}",
+                "执行明细：",
+                *gh_logs[:20]
+            ]
+            if len(gh_logs) > 20:
+                content_parts.append(f"... 其余 {len(gh_logs) - 20} 条请查看联控执行面板")
+            archive_records.append((
+                batch["batch_id"],
+                gh_name,
+                "🤖 联控执行",
+                operator_name or "系统联控",
+                "\n".join(content_parts),
+                None
+            ))
+            archived_ghs.append(gh_name)
+        save_work_order_records(archive_records)
+        skipped_ghs = [gh for gh in target_ghs if gh not in archived_ghs]
+        return len(archive_records), skipped_ghs
+
+    def ensure_api_client():
+        if DEBUG_MODE:
+            return st.session_state.get("api_client"), None
+        cached_client = st.session_state.get("api_client")
+        if cached_client is not None:
+            return cached_client, None
+        try:
+            client = IotClient()
+            login_res = client.login(USERNAME, PASSWORD, API_KEY)
+            if login_res.get("flag") != "00":
+                return None, "云端平台登录失败。"
+            token_res = client.get_access_token(USERNAME, PASSWORD)
+            if token_res.get("flag") != "00":
+                return None, "获取访问令牌失败。"
+            st.session_state["api_client"] = client
+            return client, None
+        except Exception as e:
+            return None, f"客户端初始化发生异常: {e}"
+
+    device_names = sorted({d.get("deviceName", "未知") for d in st.session_state.device_data if d.get("deviceName")})
+    online_devices = sorted({d.get("deviceName", "未知") for d in st.session_state.device_data if d.get("isLine") == 1 and d.get("deviceName")})
+
+    try:
+        all_batches, recent_work_orders = load_batch_page_data()
+    except Exception as e:
+        st.error(f"批次页面初始化失败: {e}")
+        st.stop()
+
+    active_batches = [b for b in all_batches if b.get("status") == 1]
+    batch_lookup = {format_batch_label(batch): batch for batch in all_batches}
+    active_batch_labels = [format_batch_label(batch) for batch in active_batches]
+    today = datetime.now().date()
+    due_soon_count = 0
+    overdue_count = 0
+
+    for batch in active_batches:
+        harvest_dt = normalize_dt(batch.get("expected_harvest"))
+        if not harvest_dt:
+            continue
+        days_left = (harvest_dt.date() - today).days
+        if days_left < 0:
+            overdue_count += 1
+        elif days_left <= 7:
+            due_soon_count += 1
+
+    today_order_count = 0
+    for order in recent_work_orders:
+        start_time, _ = get_work_order_time_window(order)
+        if start_time and start_time.date() == today:
+            today_order_count += 1
+
+    overview_tab, create_tab, order_tab, control_tab = st.tabs([
+        "📋 批次概览",
+        "➕ 新增批次",
+        "📑 工单中心",
+        "🚀 联控执行"
+    ])
+
+    with overview_tab:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("运行中批次", f"{len(active_batches)} 个")
+        m2.metric("7天内到期", f"{due_soon_count} 个")
+        m3.metric("已逾期未结束", f"{overdue_count} 个")
+        m4.metric("今日新增工单", f"{today_order_count} 条")
+
+        filter_col1, filter_col2, filter_col3 = st.columns([1, 1, 1.4])
+        status_filter = filter_col1.selectbox("状态筛选", ["全部", "仅运行中", "仅已结束"], key="batch_status_filter")
+        batch_gh_options = ["全部温室"] + sorted({b["gh_name"] for b in all_batches})
+        gh_filter = filter_col2.selectbox("温室筛选", batch_gh_options, key="batch_gh_filter")
+        keyword_filter = filter_col3.text_input("关键词检索", placeholder="按作物、品种或批次编号筛选", key="batch_keyword_filter")
+
+        filtered_batches = []
+        keyword_text = keyword_filter.strip().lower()
+        for batch in all_batches:
+            if status_filter == "仅运行中" and batch["status"] != 1:
+                continue
+            if status_filter == "仅已结束" and batch["status"] != 0:
+                continue
+            if gh_filter != "全部温室" and batch["gh_name"] != gh_filter:
+                continue
+            search_text = " ".join([
+                str(batch.get("batch_id", "")),
+                str(batch.get("gh_name", "")),
+                str(batch.get("crop_name", "")),
+                str(batch.get("variety", "")),
+            ]).lower()
+            if keyword_text and keyword_text not in search_text:
+                continue
+            filtered_batches.append(batch)
+
+        if not filtered_batches:
+            st.info("当前筛选条件下没有批次记录。")
+        else:
+            for batch in filtered_batches:
+                batch_id = batch["batch_id"]
+                start_dt = normalize_dt(batch.get("start_time"))
+                harvest_dt = normalize_dt(batch.get("expected_harvest"))
+                days_passed = max(0, (datetime.now() - start_dt).days) if start_dt else 0
+                total_days = (harvest_dt - start_dt).days if start_dt and harvest_dt else 0
+                progress = min(100, max(0, int(days_passed / total_days * 100))) if total_days > 0 else 0
+                days_left = (harvest_dt.date() - today).days if harvest_dt else None
+                latest_orders = [order for order in recent_work_orders if order.get("batch_id") == batch_id][:3]
+                status_icon = "🟢 运行中" if batch["status"] == 1 else "⚪ 已结束"
+                expander_title = f"{status_icon} | {format_batch_label(batch)}"
+
+                with st.expander(expander_title, expanded=(batch["status"] == 1)):
+                    top_c1, top_c2, top_c3, top_c4 = st.columns([1, 1, 1, 2])
+                    top_c1.metric("已种植天数", f"{days_passed} 天")
+                    top_c2.metric("工单归档数", f"{batch.get('work_order_count', 0)} 条")
+                    if days_left is None:
+                        top_c3.metric("采收倒计时", "未设置")
+                    else:
+                        top_c3.metric("采收倒计时", f"{days_left} 天")
+                    with top_c4:
+                        st.write("📅 **生长进度**")
+                        st.progress(progress / 100 if progress else 0.0, text=f"已完成 {progress}%")
+
+                    info_col, action_col = st.columns([1.2, 1.8], gap="large")
+                    with info_col:
+                        st.write(f"**开始日期**: {format_date(batch.get('start_time'))}")
+                        st.write(f"**预计采收**: {format_date(batch.get('expected_harvest'))}")
+                        st.write(f"**当前阶段**: `{batch.get('current_stage') or '未标注'}`")
+                        last_orders_for_batch = [order for order in recent_work_orders if order.get("batch_id") == batch_id]
+                        if last_orders_for_batch:
+                            latest_order = last_orders_for_batch[0]
+                            latest_start, latest_finish = get_work_order_time_window(latest_order)
+                            st.write(
+                                f"**最近工单**: {format_date(latest_start, with_time=True)}"
+                                f" ~ {format_date(latest_finish, with_time=True)}"
+                            )
+                        else:
+                            st.write("**最近工单**: 暂无")
+                        if days_left is not None and days_left < 0 and batch["status"] == 1:
+                            st.warning("该批次已超过预计采收日期，建议尽快处理或关闭批次。")
+
+                    with action_col:
+                        edit_c1, edit_c2 = st.columns(2)
+                        next_stage = edit_c1.selectbox(
+                            "更新阶段",
+                            stage_options,
+                            index=stage_index(batch.get("current_stage")),
+                            key=f"stage_edit_{batch_id}"
+                        )
+                        next_harvest = edit_c2.date_input(
+                            "调整预计采收",
+                            value=as_date_input_value(batch.get("expected_harvest"), start_dt.date() if start_dt else today),
+                            key=f"harvest_edit_{batch_id}"
+                        )
+                        btn_c1, btn_c2 = st.columns(2)
+                        if btn_c1.button("💾 保存批次信息", key=f"save_batch_{batch_id}", use_container_width=True):
+                            if start_dt and next_harvest < start_dt.date():
+                                st.warning("预计采收日期不能早于定植/播种日期。")
+                            else:
+                                conn = db_manager.get_connection()
+                                try:
+                                    with conn.cursor() as cursor:
+                                        cursor.execute("""
+                                            UPDATE batches
+                                            SET current_stage = %s, expected_harvest = %s
+                                            WHERE batch_id = %s
+                                        """, (next_stage, next_harvest, batch_id))
+                                    conn.commit()
+                                    st.success(f"批次 {batch_id} 已更新。")
+                                    st.rerun()
+                                finally:
+                                    conn.close()
+
+                        if batch["status"] == 1 and btn_c2.button("🏁 标记为已结束", key=f"finish_batch_{batch_id}", use_container_width=True):
+                            conn = db_manager.get_connection()
                             try:
-                                client = IotClient() 
-                                login_res = client.login(USERNAME, PASSWORD, API_KEY)
-                                if login_res.get("flag") == "00":
-                                    token_res = client.get_access_token(USERNAME, PASSWORD)
-                                    if token_res.get("flag") == "00":
-                                        st.session_state["api_client"] = client
-                                    else:
-                                        st.error("❌ 获取访问令牌失败。")
-                                        st.stop()
-                                else:
-                                    st.error("❌ 云端平台登录失败。")
-                                    st.stop()
+                                with conn.cursor() as cursor:
+                                    cursor.execute("UPDATE batches SET status = 0 WHERE batch_id = %s", (batch_id,))
+                                conn.commit()
+                                st.success(f"批次 {batch_id} 已结束。")
+                                st.rerun()
+                            finally:
+                                conn.close()
+
+                        delete_orders_flag = st.checkbox(
+                            "删除该批次时同步删除关联工单",
+                            value=True,
+                            key=f"delete_orders_with_batch_{batch_id}"
+                        )
+                        if st.button("🗑️ 删除该批次", key=f"delete_batch_{batch_id}", use_container_width=True):
+                            try:
+                                delete_batch_with_orders(batch_id, delete_orders=delete_orders_flag)
+                                st.success(f"批次 {batch_id} 已删除。")
+                                st.rerun()
                             except Exception as e:
-                                st.error(f"客户端初始化发生异常: {e}")
-                                st.stop()  
-                        api_client = st.session_state.get("api_client")
-                        if api_client:
+                                st.error(f"删除批次失败: {e}")
+
+                        if latest_orders:
+                            latest_df = pd.DataFrame([
+                                {
+                                    "开始时间": format_date(get_work_order_time_window(order)[0], with_time=True),
+                                    "完成时间": format_date(get_work_order_time_window(order)[1], with_time=True),
+                                    "作业类型": order.get("task_type", ""),
+                                    "负责人": order.get("operator", ""),
+                                    "耗时(分钟)": format_duration_value(order.get("duration_mins")),
+                                    "内容": order.get("content", "")
+                                }
+                                for order in latest_orders
+                            ])
+                            st.dataframe(latest_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("该批次暂未归档工单。")
+
+        st.divider()
+        st.subheader("📈 批次环境回溯")
+        track_batches = active_batches if active_batches else all_batches
+        if not track_batches:
+            st.info("暂无批次，无法生成环境回溯曲线。")
+        else:
+            track_labels = [format_batch_label(batch) for batch in track_batches]
+            track_col1, track_col2, track_col3 = st.columns([1.4, 1.2, 1])
+            selected_track_label = track_col1.selectbox("选择批次", track_labels, key="batch_track_label")
+            selected_batch = batch_lookup[selected_track_label]
+            sensor_options = load_greenhouse_sensor_options(selected_batch["gh_name"])
+
+            if not sensor_options:
+                st.warning(f"【{selected_batch['gh_name']}】暂无可用的数值型环境传感器。")
+            else:
+                sensor_labels = [f"{sensor['sensor_name']} ({sensor['unit'] or '无单位'})" for sensor in sensor_options]
+                default_sensor_index = 0
+                for idx, sensor in enumerate(sensor_options):
+                    if "温度" in sensor["sensor_name"] or "空温" in sensor["sensor_name"]:
+                        default_sensor_index = idx
+                        break
+                selected_sensor_label = track_col2.selectbox("环境指标", sensor_labels, index=default_sensor_index, key="batch_track_sensor")
+                bucket_label = track_col3.selectbox("聚合粒度", list(bucket_options.keys()), index=0, key="batch_track_bucket")
+                selected_sensor = sensor_options[sensor_labels.index(selected_sensor_label)]
+                history_df = load_batch_history(
+                    selected_batch["gh_name"],
+                    selected_sensor["sensor_name"],
+                    selected_batch["start_time"],
+                    bucket_options[bucket_label]
+                )
+
+                if history_df.empty:
+                    st.warning(
+                        f"在【{selected_batch['gh_name']}】中未找到自 {format_date(selected_batch['start_time'])} 起的"
+                        f"【{selected_sensor['sensor_name']}】历史数据。"
+                    )
+                else:
+                    metric_c1, metric_c2, metric_c3 = st.columns(3)
+                    metric_c1.metric("均值", f"{history_df['value'].mean():.2f}{selected_sensor['unit'] or ''}")
+                    metric_c2.metric("最高值", f"{history_df['value'].max():.2f}{selected_sensor['unit'] or ''}")
+                    metric_c3.metric("最低值", f"{history_df['value'].min():.2f}{selected_sensor['unit'] or ''}")
+
+                    fig_batch = px.line(
+                        history_df,
+                        x="bucket_time",
+                        y="value",
+                        title=f"批次 {selected_batch['batch_id']} - 【{selected_batch['crop_name']}】环境复盘",
+                        labels={
+                            "bucket_time": "时间",
+                            "value": f"{selected_sensor['sensor_name']} ({selected_sensor['unit'] or '均值'})"
+                        }
+                    )
+                    fig_batch.update_traces(line_shape="spline", line=dict(color="#00CC96", width=2))
+                    apply_growth_stage_overlay(
+                        fig_batch,
+                        selected_batch["crop_name"],
+                        normalize_dt(selected_batch["start_time"]),
+                        datetime.now()
+                    )
+                    fig_batch.update_layout(height=420, margin={"t": 50, "b": 0}, hovermode="x unified")
+                    st.plotly_chart(fig_batch, use_container_width=True)
+
+    with create_tab:
+        st.subheader("➕ 开启新的种植批次")
+        if not device_names:
+            st.warning("当前没有可用温室台账，请先同步设备数据后再创建批次。")
+        else:
+            with st.form("create_batch_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                b_gh = c1.selectbox("目标大棚", device_names, key="create_batch_gh")
+                b_crop = c2.text_input("作物名称", placeholder="例如：结球生菜")
+                b_variety = c1.text_input("品种名称", placeholder="例如：北极星一号")
+                b_stage = c2.selectbox("初始生长阶段", stage_options[:-1], key="create_batch_stage")
+                b_start = c1.date_input("定植/播种日期", value=datetime.now().date())
+                b_harvest = c2.date_input("预计采收日期", value=(datetime.now() + timedelta(days=45)).date())
+                submit_batch = st.form_submit_button("🚀 确认开启批次", type="primary", use_container_width=True)
+
+                if submit_batch:
+                    crop_name = b_crop.strip()
+                    variety_name = b_variety.strip() or None
+                    has_active_same_gh = any(batch["gh_name"] == b_gh and batch["status"] == 1 for batch in active_batches)
+
+                    if not crop_name:
+                        st.warning("请填写作物名称。")
+                    elif b_harvest < b_start:
+                        st.warning("预计采收日期不能早于定植/播种日期。")
+                    elif has_active_same_gh:
+                        st.warning(f"【{b_gh}】当前已有运行中的批次，请先结束原批次再开启新批次。")
+                    else:
+                        conn = db_manager.get_connection()
+                        try:
+                            with conn.cursor() as cursor:
+                                cursor.execute("""
+                                    INSERT INTO batches (gh_name, crop_name, variety, start_time, expected_harvest, current_stage, status)
+                                    VALUES (%s, %s, %s, %s, %s, %s, 1)
+                                """, (b_gh, crop_name, variety_name, b_start, b_harvest, b_stage))
+                            conn.commit()
+                            st.success(f"✅ 批次创建成功：{b_gh} 已进入【{crop_name}】种植周期。")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"创建失败: {e}")
+                        finally:
+                            conn.close()
+
+    with order_tab:
+        left_col, right_col = st.columns([1.2, 1.8], gap="large")
+
+        with left_col:
+            st.subheader("📑 标准化电子工单")
+            if not active_batch_labels:
+                st.info("暂无运行中的批次，当前只能查看历史工单。")
+            with st.form("sop_form", clear_on_submit=True):
+                f1, f2, f3 = st.columns([2, 2, 1])
+                if active_batch_labels:
+                    selected_batch_label = f1.selectbox("关联批次", active_batch_labels, key="work_order_batch")
+                else:
+                    selected_batch_label = f1.selectbox("关联批次", ["无可用批次"], disabled=True, key="work_order_batch_disabled")
+                task_type = f2.selectbox("作业类型 (SOP)", task_options[:-1], key="work_order_task_type")
+                duration = f3.number_input("耗时(分钟)", min_value=1, value=30)
+                operator = st.text_input("操作负责人", placeholder="输入执行人姓名")
+                details = st.text_area("作业明细内容", placeholder="例如：设定 EC 值 1.5，开启侧窗通风 30%...")
+                submitted = st.form_submit_button("💾 生成并归档工单", type="primary", use_container_width=True)
+
+                if submitted:
+                    if not active_batch_labels:
+                        st.warning("当前没有可关联的运行中批次。")
+                    elif not operator.strip():
+                        st.warning("请填写操作负责人。")
+                    elif not details.strip():
+                        st.warning("请填写作业明细内容。")
+                    else:
+                        selected_batch = batch_lookup[selected_batch_label]
+                        try:
+                            save_work_order_records([(
+                                selected_batch["batch_id"],
+                                selected_batch["gh_name"],
+                                task_type,
+                                operator.strip(),
+                                details.strip(),
+                                duration
+                            )])
+                            st.success(f"✅ 【{task_type}】已归档到批次 {selected_batch['batch_id']}。")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"工单存入失败: {e}")
+
+        with right_col:
+            st.subheader("🗂️ 工单历史与追踪")
+            order_filter_col1, order_filter_col2, order_filter_col3 = st.columns([1.4, 1.1, 1.3])
+            order_batch_options = ["全部批次"] + [format_batch_label(batch) for batch in all_batches]
+            order_gh_options = ["全部温室"] + sorted({order["gh_name"] for order in recent_work_orders if order.get("gh_name")})
+            order_type_options = ["全部作业"] + sorted({order["task_type"] for order in recent_work_orders if order.get("task_type")})
+            selected_order_batch = order_filter_col1.selectbox("批次筛选", order_batch_options, key="order_history_batch")
+            selected_order_gh = order_filter_col2.selectbox("温室筛选", order_gh_options, key="order_history_gh")
+            selected_order_type = order_filter_col3.selectbox("类型筛选", order_type_options, key="order_history_type")
+            order_keyword = st.text_input("工单检索", placeholder="按负责人、内容关键词检索", key="order_history_keyword")
+
+            filtered_orders = []
+            order_keyword_text = order_keyword.strip().lower()
+            for order in recent_work_orders:
+                if selected_order_batch != "全部批次":
+                    target_batch = batch_lookup[selected_order_batch]
+                    if order.get("batch_id") != target_batch["batch_id"]:
+                        continue
+                if selected_order_gh != "全部温室" and order.get("gh_name") != selected_order_gh:
+                    continue
+                if selected_order_type != "全部作业" and order.get("task_type") != selected_order_type:
+                    continue
+                order_search_text = " ".join([
+                    str(order.get("operator", "")),
+                    str(order.get("content", "")),
+                    str(order.get("task_type", "")),
+                    str(order.get("gh_name", "")),
+                ]).lower()
+                if order_keyword_text and order_keyword_text not in order_search_text:
+                    continue
+                filtered_orders.append(order)
+
+            total_duration = sum(int(order.get("duration_mins") or 0) for order in filtered_orders)
+            stat_c1, stat_c2 = st.columns(2)
+            stat_c1.metric("命中工单数", f"{len(filtered_orders)} 条")
+            stat_c2.metric("累计工时", f"{total_duration} 分钟")
+
+            clean_c1, clean_c2 = st.columns(2)
+            if clean_c1.button("🧹 清空全部工单", use_container_width=True, key="delete_all_orders"):
+                try:
+                    bulk_delete_test_data(delete_all_orders=True)
+                    st.success("全部工单已清空。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"清空工单失败: {e}")
+            if clean_c2.button("🧹 删除全部已结束批次", use_container_width=True, key="delete_finished_batches"):
+                try:
+                    bulk_delete_test_data(delete_finished_batches=True)
+                    st.success("全部已结束批次及其关联工单已删除。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"清理已结束批次失败: {e}")
+
+            if not filtered_orders:
+                st.info("当前筛选条件下没有工单记录。")
+            else:
+                orders_df = pd.DataFrame([
+                    {
+                        "开始时间": format_date(get_work_order_time_window(order)[0], with_time=True),
+                        "完成时间": format_date(get_work_order_time_window(order)[1], with_time=True),
+                        "批次ID": order.get("batch_id"),
+                        "温室": order.get("gh_name"),
+                        "作物": order.get("crop_name") or "",
+                        "当前阶段": order.get("current_stage") or "",
+                        "作业类型": order.get("task_type"),
+                        "负责人": order.get("operator"),
+                        "耗时(分钟)": format_duration_value(order.get("duration_mins")),
+                        "内容": order.get("content")
+                    }
+                    for order in filtered_orders
+                ])
+                st.dataframe(orders_df, use_container_width=True, hide_index=True)
+                order_delete_options = {
+                    f"工单ID:{order['id']} | {format_date(get_work_order_time_window(order)[0], with_time=True)} | "
+                    f"{order.get('gh_name', '未知温室')} | {order.get('task_type', '未知类型')}": order["id"]
+                    for order in filtered_orders
+                }
+                delete_order_col1, delete_order_col2 = st.columns([3, 1])
+                selected_delete_order_label = delete_order_col1.selectbox(
+                    "选择要删除的工单",
+                    list(order_delete_options.keys()),
+                    key="delete_work_order_select"
+                )
+                if delete_order_col2.button("🗑️ 删除工单", use_container_width=True, key="delete_work_order_btn"):
+                    try:
+                        delete_work_order(order_delete_options[selected_delete_order_label])
+                        st.success("工单已删除。")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"删除工单失败: {e}")
+                csv_data = orders_df.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "📥 下载工单台账 CSV",
+                    data=csv_data,
+                    file_name="工单台账.csv",
+                    mime="text/csv"
+                )
+
+    with control_tab:
+        st.subheader("🚀 多设备一键联控")
+        st.caption("按温室统一下发动作，并可自动归档成联控工单。")
+        if DEBUG_MODE:
+            st.warning("当前处于测试模式：联控仅展示将要下发的指令，不会真实触达硬件。")
+        if not online_devices:
+            st.error("当前无在线设备可控。")
+        else:
+            ctrl_left, ctrl_right = st.columns([1.2, 1.8], gap="large")
+            with ctrl_left:
+                default_targets = online_devices.copy()
+                target_ghs = st.multiselect("1. 选择需要联控的在线温室", online_devices, default=default_targets)
+
+                switch_names = set()
+                for device in st.session_state.device_data:
+                    if device.get("deviceName") not in target_ghs:
+                        continue
+                    for sensor in device.get("sensorsList") or []:
+                        if sensor.get("sensorTypeId") in [2, 5, 6]:
+                            sensor_name = (sensor.get("sensorName") or "").strip()
+                            if sensor_name:
+                                switch_names.add(sensor_name)
+
+                action_options = []
+                for sensor_name in sorted(switch_names):
+                    action_options.append(f"🟢 打开所有 {sensor_name}")
+                    action_options.append(f"🔴 关闭所有 {sensor_name}")
+                if not action_options:
+                    action_options = ["⚠️ 选中的温室暂无可控设备"]
+
+                action = st.selectbox("2. 选择统一执行动作", action_options, key="control_action_select")
+                matched_target_count = 0
+                if action_options and "⚠️" not in action:
+                    target_sensor_name = action.replace("🟢 打开所有 ", "").replace("🔴 关闭所有 ", "")
+                    for device in st.session_state.device_data:
+                        if device.get("deviceName") not in target_ghs:
+                            continue
+                        for sensor in device.get("sensorsList") or []:
+                            if sensor.get("sensorTypeId") in [2, 5, 6] and (sensor.get("sensorName") or "").strip() == target_sensor_name:
+                                matched_target_count += 1
+                st.caption(f"预计触达 {matched_target_count} 个可控对象。")
+
+                archive_control = st.checkbox("将本次联控自动归档为工单", value=bool(active_batches))
+                control_operator = st.text_input("执行负责人", value="系统联控" if archive_control else "", key="control_operator")
+                control_note = st.text_area("执行说明", placeholder="例如：中午棚内升温较快，统一打开顶部通风。", key="control_note")
+
+                if st.button("🚀 下发联控指令", type="primary", use_container_width=True):
+                    if not target_ghs:
+                        st.warning("请至少选择一个温室。")
+                    elif "⚠️" in action:
+                        st.error("当前无有效指令可下发。")
+                    else:
+                        api_client, client_error = ensure_api_client()
+                        if client_error:
+                            st.error(client_error)
+                        elif api_client:
                             is_open = "打开" in action
                             target_switcher_val = 1 if is_open else 0
                             target_sensor_name = action.replace("🟢 打开所有 ", "").replace("🔴 关闭所有 ", "")
                             success_cnt, fail_cnt, skip_cnt, details_log = execute_batch_control(
-                                client=api_client, 
-                                target_ghs=target_ghs, 
-                                target_sensor_name=target_sensor_name, 
-                                target_switcher_val=target_switcher_val, 
+                                client=api_client,
+                                target_ghs=target_ghs,
+                                target_sensor_name=target_sensor_name,
+                                target_switcher_val=target_switcher_val,
                             )
-                            summary_msg = f"操作完毕。成功指令: **{success_cnt}**"
-                            if skip_cnt > 0:
-                                summary_msg += f"，拦截冗余指令: **{skip_cnt}** (已是目标状态)"
-                            if fail_cnt > 0:
-                                summary_msg += f"，失败: **{fail_cnt}**"
-                                
-                            if fail_cnt == 0 and success_cnt > 0:
-                                st.success(f"✅ {summary_msg}")
-                            elif fail_cnt > 0:
-                                st.warning(f"⚠️ {summary_msg}。请检查失败设备网络。")
-                            elif success_cnt == 0 and skip_cnt > 0:
-                                st.success(f"✅ 所选大棚设备已经全部处于目标状态，无需重复下发指令。")
-                            else:
-                                st.error("❌ 未匹配到可控的物理设备实体。")
-                            
-                            if details_log:
-                                st.dataframe(pd.DataFrame(details_log), width='stretch')
-    with col2:
-        db_manager.init_db()
-        conn = db_manager.get_connection()
-        active_batches_data = [] # 存储原始行数据
-        active_batch_labels = [] # 存储显示用的字符串
-        
-        try:
-            with conn.cursor() as cursor:
-                # 查询所有正在进行中的种植批次
-                cursor.execute("""
-                    SELECT batch_id, gh_name, crop_name, variety, start_time, expected_harvest, current_stage 
-                    FROM batches WHERE status = 1
-                """)
-                active_batches_data = cursor.fetchall()
-                active_batch_labels = [f"ID:{b['batch_id']} | {b['gh_name']} - {b['crop_name']}({b['variety']})" for b in active_batches_data]
-        finally:
-            conn.close()
+                            archive_count = 0
+                            skipped_archive_ghs = []
+                            if archive_control and details_log:
+                                archive_count, skipped_archive_ghs = archive_control_orders(
+                                    target_ghs=target_ghs,
+                                    action_label=action,
+                                    operator_name=control_operator.strip(),
+                                    note_text=control_note.strip(),
+                                    details_log=details_log,
+                                    running_batches=active_batches
+                                )
 
-        # ================= 【需求9】电子工单模板：数据归档 =================
-        st.subheader("📑 标准化电子工单")
-        with st.form("sop_form", clear_on_submit=True):
-            col1, col2, col3 = st.columns([2, 2, 1])
-            
-            if not active_batch_labels:
-                st.warning("⚠️ 暂无进行中的批次，请先在数据库中创建批次信息。")
-                selected_batch_label = col1.selectbox("关联批次", ["无可用批次"], disabled=True)
-            else:
-                selected_batch_label = col1.selectbox("关联批次", active_batch_labels)
-                
-            task_type = col2.selectbox("作业类型 (SOP)", ["🌱 播种与定植", "💧 智能灌溉", "💊 水肥一体化施肥", "✂️ 打叶与采收", "🌀 强制通风"])
-            duration = col3.number_input("耗时(分钟)", min_value=1, value=30)
-            
-            operator = st.text_input("操作负责人", placeholder="输入执行人姓名")
-            details = st.text_area("作业明细内容", placeholder="例如：设定EC值1.5，开启侧窗通风30%...")
-            
-            submitted = st.form_submit_button("💾 生成并归档工单", type="primary", use_container_width=True)
-            
-            if submitted and active_batch_labels:
-                # 解析选中的 batch_id 和 gh_name
-                selected_batch = next(b for b in active_batches_data if f"ID:{b['batch_id']}" in selected_batch_label)
-                
-                conn = db_manager.get_connection()
-                try:
-                    with conn.cursor() as cursor:
-                        sql = """
-                            INSERT INTO work_orders (batch_id, gh_name, task_type, operator, content, duration_mins) 
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                        """
-                        cursor.execute(sql, (
-                            selected_batch['batch_id'], 
-                            selected_batch['gh_name'], 
-                            task_type, 
-                            operator, 
-                            details, 
-                            duration
-                        ))
-                        conn.commit()
-                    st.success(f"✅ 【{task_type}】工单已成功存入 TiDB 数据库，并关联至批次 {selected_batch['batch_id']}！")
-                except Exception as e:
-                    st.error(f"工单存入失败: {e}")
-                finally:
-                    conn.close()
-
-        st.divider()
-
-        # ================= 【需求10】批次管理与生长曲线：真实数据关联 =================
-        st.subheader("📦 农作物批次与生长曲线关联")
-        st.caption("系统自动根据批次的【定植时间】截取历史环境数据，并进行生长阶段标注。")
-        
-        if not active_batch_labels:
-            st.info("尚未选择任何种植批次。")
-        else:
-            c_b1, c_b2 = st.columns([1, 3])
-            
-            with c_b1:
-                selected_track_label = st.selectbox("选择要追踪的批次", active_batch_labels, key="track_batch")
-                batch = next(b for b in active_batches_data if f"ID:{b['batch_id']}" in selected_track_label)
-                
-                # 自动计算批次指标
-                runtime_days = (datetime.now() - batch['start_time']).days
-                st.metric("批次运行时长", f"{runtime_days} 天")
-                
-                if batch['expected_harvest']:
-                    days_left = (batch['expected_harvest'] - datetime.now()).days
-                    st.metric("预计采收倒计时", f"{days_left} 天", delta_color="inverse")
-                
-                st.write(f"**当前阶段**: `{batch['current_stage'] or '未标注'}`")
-
-            with c_b2:
-                # 🌟 核心逻辑：从数据库拉取该批次在该大棚的真实环境曲线
-                with st.spinner("正在回溯该批次的历史生长环境数据..."):
-                    conn = db_manager.get_connection()
-                    batch_history = []
-                    try:
-                        with conn.cursor() as cursor:
-                            # 查找该大棚下名为“温度”或“空温”的传感器 ID
-                            cursor.execute("""
-                                SELECT s.sensor_id FROM sensors s 
-                                JOIN devices d ON s.device_id = d.device_id 
-                                WHERE d.gh_name = %s AND (s.sensor_name LIKE '%%温度%%' OR s.sensor_name LIKE '%%空温%%')
-                                LIMIT 1
-                            """, (batch['gh_name'],))
-                            res_s = cursor.fetchone()
-                            
-                            if res_s:
-                                sensor_id = res_s['sensor_id']
-                                # 截取从 start_time 至今的该传感器所有历史值
-                                cursor.execute("""
-                                    SELECT add_time, value FROM sensor_history 
-                                    WHERE sensor_id = %s AND add_time >= %s 
-                                    ORDER BY add_time ASC
-                                """, (sensor_id, batch['start_time']))
-                                batch_history = cursor.fetchall()
-                    finally:
-                        conn.close()
-
-                if not batch_history:
-                    st.warning(f"⚠️ 在【{batch['gh_name']}】中未找到该批次对应的历史温度数据。")
+                            st.session_state["control_execution_result"] = {
+                                "summary": {
+                                    "success": success_cnt,
+                                    "fail": fail_cnt,
+                                    "skip": skip_cnt,
+                                    "archive_count": archive_count,
+                                    "skipped_archive_ghs": skipped_archive_ghs,
+                                    "action": action,
+                                    "target_ghs": target_ghs,
+                                },
+                                "details": details_log
+                            }
+                            st.rerun()
+            with ctrl_right:
+                result = st.session_state.get("control_execution_result")
+                if not result:
+                    st.info("执行后的联控明细、归档结果会显示在这里。")
                 else:
-                    df_b = pd.DataFrame(batch_history)
-                    df_b['value'] = pd.to_numeric(df_b['value'], errors='coerce')
-                    df_b['add_time'] = pd.to_datetime(df_b['add_time'])
-                    
-                    # 绘制真实曲线
-                    fig_batch = px.line(df_b, x='add_time', y='value', 
-                                    title=f"批次 {batch['batch_id']} 环境回溯 ({batch['crop_name']})",
-                                    labels={"add_time": "生长日期", "value": "空气温度 (℃)"})
-                    
-                    # 🌟 自动化生长阶段标注 (以生菜为例，天数可根据 crop_name 动态调整)
-                    start_date = batch['start_time']
-                    if "生菜" in batch['crop_name']:
-                        # 缓苗期: 前7天
-                        fig_batch.add_vrect(x0=start_date, x1=start_date + timedelta(days=7), 
-                                        fillcolor="green", opacity=0.1, line_width=0, annotation_text="🌱 缓苗期")
-                        # 莲座期: 7-25天
-                        fig_batch.add_vrect(x0=start_date + timedelta(days=7), x1=start_date + timedelta(days=25), 
-                                        fillcolor="yellow", opacity=0.1, line_width=0, annotation_text="🌿 莲座期")
-                        # 结球期: 25天以后
-                        if runtime_days > 25:
-                            fig_batch.add_vrect(x0=start_date + timedelta(days=25), x1=datetime.now(), 
-                                            fillcolor="orange", opacity=0.1, line_width=0, annotation_text="🥬 结球期")
+                    summary = result["summary"]
+                    summary_text = f"成功 {summary['success']} 条，跳过 {summary['skip']} 条，失败 {summary['fail']} 条。"
+                    if summary["archive_count"] > 0:
+                        summary_text += f" 已归档 {summary['archive_count']} 条联控工单。"
+                    if summary["skipped_archive_ghs"]:
+                        skipped_text = "、".join(summary["skipped_archive_ghs"])
+                        summary_text += f" 以下温室无运行中批次，未自动归档：{skipped_text}。"
 
-                    fig_batch.update_layout(height=350, margin={"t":40, "b":0})
-                    st.plotly_chart(fig_batch, use_container_width=True)
-            
+                    if summary["fail"] == 0 and summary["success"] > 0:
+                        st.success(summary_text)
+                    elif summary["fail"] > 0:
+                        st.warning(summary_text)
+                    elif summary["success"] == 0 and summary["skip"] > 0:
+                        st.info("所选大棚设备已全部处于目标状态，无需重复下发。")
+                    else:
+                        st.error("未匹配到可控的物理设备实体。")
+
+                    st.write(f"**最近联控动作**: {summary['action']}")
+                    st.write(f"**目标温室**: {'、'.join(summary['target_ghs'])}")
+
+                    details = result.get("details") or []
+                    if details:
+                        st.dataframe(pd.DataFrame(details), use_container_width=True, hide_index=True)
+
 # ----------------- 页面五：策略与预警 -----------------
-elif menu == "⚙️ 策略与预警 (设规则)":
+elif menu == "⚙️ 策略与预警":
     st.header("⚙️ 自动化策略与报警配置")
     st.markdown("### 第一步：选择通知接收方式")
     push_mode = st.radio(
@@ -1175,7 +1640,6 @@ elif menu == "⚙️ 策略与预警 (设规则)":
     else:
         target_types = 2
     gh_names = ["所有大棚"] + [d['deviceName'] for d in get_sorted_devices(st.session_state.device_data)]
-    
     c1, c2 = st.columns(2)
     target_gh = c1.selectbox("应用范围", gh_names)
     # ================= 2. 严密的传感器提取逻辑 (交集 vs 单体) =================
@@ -1194,13 +1658,10 @@ elif menu == "⚙️ 策略与预警 (设规则)":
                     if base_name:
                         current_gh_metrics.add(base_name)
                         metric_info_map[base_name] = {"unit": unit, "type": s.get('sensorTypeId') }
-                    
-            # 求交集算法
             if common_metrics is None:
                 common_metrics = current_gh_metrics # 第一个大棚作为初始集合
             else:
                 common_metrics = common_metrics.intersection(current_gh_metrics) # 连续求交集
-        # 只保留公共的传感器
         metric_opts = sorted(list(common_metrics)) if common_metrics else []
     else:# 【局部模式】：只读取指定大棚的数值传感器且数值非零
         for d in st.session_state.device_data:
@@ -1306,8 +1767,7 @@ elif menu == "⚙️ 策略与预警 (设规则)":
                     conn.commit()
                     conn.close()
                     st.balloons()
-                    
-                    # 🌟 体验优化：根据是全局还是局部，给予不同的成功提示
+
                     if target_gh == "全局所有大棚":
                         st.success(f"✅ 已成功为 **{len(actual_targets)}** 个大棚批量部署【{target_metric}】的报警策略！")
                     else:
@@ -1315,60 +1775,3 @@ elif menu == "⚙️ 策略与预警 (设规则)":
 
                 except Exception as e:
                     st.error(f"⚠️ 保存失败: {e}")
-                    
-
-
-
-# 10. 批次管理：关联环境与生长曲线自动标注
-# # 假设这是从你的 sensor_history 表中，提取该“批次”从种下到现在的真实日均温
-# # select ... where add_time >= '批次开始时间'
-# df_batch = pd.DataFrame({
-#     '日期': pd.date_range(start='2026-03-01', periods=40),
-#     '温度': [20 + (i*0.1) for i in range(40)] # 模拟温度略微上升
-# })
-
-# fig = px.line(df_batch, x='日期', y='温度', title="生菜批次-202603 生长环境曲线 (自动节点标注)")
-
-# # 🌟 核心魔法：根据天数自动打上生长周期的底色标注
-# fig.add_vrect(x0="2026-03-01", x1="2026-03-10", fillcolor="green", opacity=0.1, line_width=0, annotation_text="🌱 缓苗期")
-# fig.add_vrect(x0="2026-03-10", x1="2026-03-30", fillcolor="yellow", opacity=0.1, line_width=0, annotation_text="🌿 莲座期")
-# fig.add_vrect(x0="2026-03-30", x1="2026-04-10", fillcolor="orange", opacity=0.1, line_width=0, annotation_text="🥬 结球期")
-
-# st.plotly_chart(fig, use_container_width=True)
-
-
-                    
-# 11. 远程控制与农事表单绑定（自动弹出）                   
-# import streamlit as st
-
-# # 1. 定义一个针对特定动作的弹窗表单 (例如通风表单)
-# @st.dialog("📝 自动农事记录：通风换气")
-# def ventilation_form(gh_name):
-#     st.info(f"系统检测到您刚刚操作了【{gh_name}】的卷膜机。为规范管理，请补充通风记录。")
-#     reason = st.selectbox("通风原因", ["常规换气", "高温降温", "降低湿度", "补充二氧化碳"])
-#     target_time = st.number_input("预计通风时长 (分钟)", min_value=10, value=30)
-    
-#     if st.button("提交记录"):
-#         # 执行插入 work_orders 表的操作
-#         st.session_state.show_form = False # 关闭弹窗触发器
-#         st.rerun() # 刷新页面关闭弹窗
-
-# # 2. 在你原来的控制代码逻辑中，加入触发机制
-# target_sensor_name = "1号卷膜机"
-# action = "开启"
-
-# if st.button("开启卷膜机"):
-#     # 假设这里是你调用 API 下发成功的代码...
-#     ctrl_success = True 
-    
-#     if ctrl_success:
-#         st.success("✅ 指令下发成功！")
-        
-#         # 🌟 核心：识别操作的是什么设备，触发对应的弹窗
-#         if "卷膜" in target_sensor_name and "开" in action:
-#             # 激活并显示通风表单弹窗
-#             ventilation_form(selected_gh)
-            
-#         elif "雾化" in target_sensor_name or "水泵" in target_sensor_name:
-#             # 可以写一个 misting_form(selected_gh) 弹窗
-#             st.toast("提示：请记录灌溉/降温数据", icon="💧")

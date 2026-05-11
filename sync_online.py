@@ -1,11 +1,13 @@
 import requests
 import pymysql
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import db_manager
 from config import *
 from utils.iot_client import IotClient  
+
+ALERT_COOLDOWN_HOURS = 5
 
 
 def run_single_sync():
@@ -67,6 +69,61 @@ def send_dingtalk_msg(webhook, data, reason):
     except:
         print(f"⚠️ 钉钉推送失败: {data['device_name']}-{data['sensor_name']}")
         pass
+
+def send_recovery_msg(webhook, data, message):
+    """执行钉钉 Markdown 恢复通知"""
+    if not webhook:
+        return
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": "环境恢复通知",
+            "text": f"### ✅ 环境恢复通知\n"
+                    f"--- \n"
+                    f"**📍 恢复位置**：{data['device_name']} \n\n"
+                    f"**📊 监控对象**：{data['sensor_name']} \n\n"
+                    f"**当前状态**：<font color='#16a34a'>**已恢复正常**</font> \n\n"
+                    f"**说明**：{message} \n\n"
+                    f"**⏰ 采集时间**：{data['data_time']} \n\n"
+                    f"--- \n"
+                    f"系统已自动重置该报警状态。"
+        }
+    }
+    try:
+        requests.post(webhook, data=json.dumps(payload), headers=headers, timeout=5)
+        print(f"✅ 已发送恢复通知：{data['device_name']}-{data['sensor_name']}")
+    except:
+        print(f"⚠️ 恢复通知发送失败: {data['device_name']}-{data['sensor_name']}")
+        pass
+
+def normalize_metric_name(sensor_name, sensor_type):
+    if sensor_type == 1:
+        return re.sub(r'^\d+[号组]', '', sensor_name).strip()
+    return sensor_name
+
+def evaluate_rule_status(rule, data):
+    sensor_type = data.get('sensor_type')
+    try:
+        current_value = float(data['value'])
+    except Exception:
+        return "normal", "", None
+
+    if sensor_type == 1:
+        if rule['max_val'] is not None and current_value > float(rule['max_val']):
+            return "abnormal", f"数值超过上限 {rule['max_val']}", current_value
+        if rule['min_val'] is not None and current_value < float(rule['min_val']):
+            return "abnormal", f"数值低于下限 {rule['min_val']}", current_value
+        return "normal", "数值已恢复至阈值范围内", current_value
+
+    if sensor_type == 2:
+        if rule['max_val'] is not None and current_value == float(rule['max_val']):
+            state_desc = "触发/异常/开启" if current_value == 1.0 else "正常/关闭"
+            return "abnormal", f"设备状态变为设定目标: {int(current_value)} ({state_desc})", current_value
+        return "normal", "设备状态已恢复至非报警目标值", current_value
+
+    return "normal", "", current_value
+
 # ==================== 2. 预警巡检逻辑 ====================
 def check_alerts_logic(snapshot):
     """
@@ -78,33 +135,95 @@ def check_alerts_logic(snapshot):
         with conn.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute("SELECT * FROM alert_rules")
             rules = cursor.fetchall()
-            if not rules: return
+            if not rules:
+                return
+
+            cursor.execute("SELECT * FROM alert_state")
+            alert_states = cursor.fetchall()
+            state_map = {(row['target_gh'], row['metric_name']): row for row in alert_states}
+            now = datetime.now()
+
             for data in snapshot:
-                    try:
-                        s_type = data.get('sensor_type')
-                        if s_type == 1:
-                            base_name = re.sub(r'^\d+[号组]', '', data['sensor_name']).strip()
+                try:
+                    sensor_type = data.get('sensor_type')
+                    metric_name = normalize_metric_name(data['sensor_name'], sensor_type)
+                    for rule in rules:
+                        if rule['target_gh'] != data['device_name'] or rule['metric_name'] != metric_name:
+                            continue
+
+                        status, message, current_value = evaluate_rule_status(rule, data)
+                        state_key = (rule['target_gh'], rule['metric_name'])
+                        previous_state = state_map.get(state_key)
+                        is_active = int(previous_state['is_active']) == 1 if previous_state else False
+                        last_alert_time = previous_state.get('last_alert_time') if previous_state else None
+
+                        if status == "abnormal":
+                            should_send = False
+                            if not is_active:
+                                should_send = True
+                            elif last_alert_time and now - last_alert_time >= timedelta(hours=ALERT_COOLDOWN_HOURS):
+                                should_send = True
+
+                            if should_send:
+                                reason = message if not is_active else f"持续异常提醒：{message}"
+                                send_dingtalk_msg(rule['ding_webhook'], data, reason)
+
+                            cursor.execute("""
+                                INSERT INTO alert_state
+                                    (target_gh, metric_name, is_active, last_status, last_alert_time, last_value)
+                                VALUES (%s, %s, 1, 'abnormal', %s, %s)
+                                ON DUPLICATE KEY UPDATE
+                                    is_active = 1,
+                                    last_status = 'abnormal',
+                                    last_alert_time = IF(%s, %s, last_alert_time),
+                                    last_value = %s
+                            """, (
+                                rule['target_gh'],
+                                rule['metric_name'],
+                                now if should_send else None,
+                                str(current_value) if current_value is not None else data['value'],
+                                1 if should_send else 0,
+                                now,
+                                str(current_value) if current_value is not None else data['value'],
+                            ))
+                            state_map[state_key] = {
+                                'target_gh': rule['target_gh'],
+                                'metric_name': rule['metric_name'],
+                                'is_active': 1,
+                                'last_alert_time': now if should_send else last_alert_time,
+                            }
                         else:
-                            base_name = data['sensor_name']
-                        for rule in rules:
-                            if rule['target_gh'] == data['device_name'] and rule['metric_name'] == base_name:
-                                val = float(data['value'])
-                                reason = ""
-                                if s_type == 1:
-                                    if val > rule['max_val']:
-                                        reason = f"数值超过上限 {rule['max_val']}"
-                                    elif val < rule['min_val']:
-                                        reason = f"数值低于下限 {rule['min_val']}"
-                                elif s_type ==  2:
-                                    if val == rule['max_val']:
-                                        # 给人看的友好提示：如果值为 1 提示触发/异常，为 0 提示关闭/恢复
-                                        state_desc = "触发/异常/开启" if val == 1.0 else "正常/关闭"
-                                        reason = f"设备状态变为设定目标: {int(val)} ({state_desc})"
-                                if reason:
-                                    send_dingtalk_msg(rule['ding_webhook'], data, reason)
-                    except: continue
+                            if is_active:
+                                send_recovery_msg(rule['ding_webhook'], data, message)
+                            cursor.execute("""
+                                INSERT INTO alert_state
+                                    (target_gh, metric_name, is_active, last_status, last_recovery_time, last_value)
+                                VALUES (%s, %s, 0, 'normal', %s, %s)
+                                ON DUPLICATE KEY UPDATE
+                                    is_active = 0,
+                                    last_status = 'normal',
+                                    last_recovery_time = %s,
+                                    last_value = %s
+                            """, (
+                                rule['target_gh'],
+                                rule['metric_name'],
+                                now,
+                                str(current_value) if current_value is not None else data['value'],
+                                now,
+                                str(current_value) if current_value is not None else data['value'],
+                            ))
+                            state_map[state_key] = {
+                                'target_gh': rule['target_gh'],
+                                'metric_name': rule['metric_name'],
+                                'is_active': 0,
+                                'last_alert_time': last_alert_time,
+                            }
+                except Exception:
+                    continue
+        conn.commit()
     except Exception as e:
         print(f"⚠️ 报警判定环节出错: {e}")
+        conn.rollback()
     finally:
         conn.close()
 if __name__ == "__main__":
@@ -112,4 +231,3 @@ if __name__ == "__main__":
     run_single_sync()
     
     
-

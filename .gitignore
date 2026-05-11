@@ -11,6 +11,9 @@ env/
 # 忽略本地遗留的 SQLite 数据库文件 (如果有的话)
 *.db
 
+
 # 本地测试文件
 *.ipynb
 *.json
+database_manager.py
+*.txt
