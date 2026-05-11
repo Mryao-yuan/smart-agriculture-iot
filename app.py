@@ -29,8 +29,8 @@ bg_path = "imgs/bg1.png"
 json_path="./users.json"
 
 # === login ===
-# if not check_password(bg_path,json_path):
-#     st.stop()
+if not check_password(bg_path,json_path):
+    st.stop()
 
 # ==================== 1. 基础配置与全局工具 ====================
 st.set_page_config(page_title="智慧温室 IoT 平台", layout="wide", page_icon="🌿")
