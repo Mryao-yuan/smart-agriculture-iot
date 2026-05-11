@@ -16,4 +16,4 @@ env/
 *.ipynb
 *.json
 database_manager.py
-*.txt
+a.txt
