@@ -11,6 +11,14 @@ from utils.weather import get_weather_amap
 import db_manager
 from config import *
 
+def is_mobile_client():
+    try:
+        user_agent = st.context.headers.get("user-agent", "").lower()
+    except Exception:
+        user_agent = ""
+    mobile_keywords = ["iphone", "android", "mobile", "ipad", "harmony"]
+    return any(keyword in user_agent for keyword in mobile_keywords)
+
 def get_device_status_meta(device):
     if device.get('isDelete', 0) == 1:
         return "停用", "#94A3B8", "#334155"
@@ -72,70 +80,74 @@ def render_greenhouse_selector_cards(devices):
     st.subheader("🗺️ 温室地图状态")
     st.caption("基于温室经纬度展示各棚状态，颜色对应正常/报警/离线/停用；下方可直接进入单棚设备沙盘。")
     sorted_devices = sorted(devices, key=lambda d: extract_gh_num(d.get('deviceName', '')))
+    is_mobile = is_mobile_client()
 
-    fig = go.Figure()
-    status_groups = {}
-    for device in sorted_devices:
-        status_text, color, _ = get_device_status_meta(device)
-        status_groups.setdefault(status_text, {"color": color, "devices": []})
-        status_groups[status_text]["devices"].append(device)
+    if is_mobile:
+        st.info("📱 当前为移动端访问，已自动切换为轻量模式：隐藏地图底图，请直接使用下方温室卡片进入单棚设备沙盘。")
+    else:
+        fig = go.Figure()
+        status_groups = {}
+        for device in sorted_devices:
+            status_text, color, _ = get_device_status_meta(device)
+            status_groups.setdefault(status_text, {"color": color, "devices": []})
+            status_groups[status_text]["devices"].append(device)
 
-    for status_text, group in status_groups.items():
-        lats, lngs, texts, point_customdata = [], [], [], []
-        for idx, device in enumerate(group["devices"]):
-            try:
-                base_lat = float(device.get('lat', 36.73291))
-                base_lng = float(device.get('lng', 101.74776))
-            except Exception:
-                base_lat, base_lng = 36.73291, 101.74776
-            offset_lat = base_lat + ((idx // 3) - 1) * 0.00012
-            offset_lng = base_lng + ((idx % 3) - 1) * 0.00012
-            lats.append(offset_lat)
-            lngs.append(offset_lng)
-            texts.append(
-                f"<b>{device.get('deviceName', '未知温室')}</b><br>"
-                f"状态：{status_text}<br>"
-                f"在线：{'是' if device.get('isLine', 0) else '否'}<br>"
-                f"报警：{'是' if device.get('isAlarms', 0) else '否'}<br>"
-                f"节点数：{len(device.get('sensorsList') or [])}"
-            )
-            point_customdata.append([device.get('deviceName', '未知温室')])
-        fig.add_trace(go.Scattermap(
-            lat=lats,
-            lon=lngs,
-            mode='markers+text',
-            text=[d.get('deviceName', '未知温室') for d in group["devices"]],
-            textposition='top center',
-            customdata=point_customdata,
-            marker=dict(size=16, color=group["color"], opacity=0.95),
-            name=status_text,
-            hovertemplate="%{hovertext}<extra></extra>",
-            textfont=dict(size=12, color='#0f172a'),
-            hovertext=texts,
-        ))
+        for status_text, group in status_groups.items():
+            lats, lngs, texts, point_customdata = [], [], [], []
+            for idx, device in enumerate(group["devices"]):
+                try:
+                    base_lat = float(device.get('lat', 36.73291))
+                    base_lng = float(device.get('lng', 101.74776))
+                except Exception:
+                    base_lat, base_lng = 36.73291, 101.74776
+                offset_lat = base_lat + ((idx // 3) - 1) * 0.00012
+                offset_lng = base_lng + ((idx % 3) - 1) * 0.00012
+                lats.append(offset_lat)
+                lngs.append(offset_lng)
+                texts.append(
+                    f"<b>{device.get('deviceName', '未知温室')}</b><br>"
+                    f"状态：{status_text}<br>"
+                    f"在线：{'是' if device.get('isLine', 0) else '否'}<br>"
+                    f"报警：{'是' if device.get('isAlarms', 0) else '否'}<br>"
+                    f"节点数：{len(device.get('sensorsList') or [])}"
+                )
+                point_customdata.append([device.get('deviceName', '未知温室')])
+            fig.add_trace(go.Scattermap(
+                lat=lats,
+                lon=lngs,
+                mode='markers+text',
+                text=[d.get('deviceName', '未知温室') for d in group["devices"]],
+                textposition='top center',
+                customdata=point_customdata,
+                marker=dict(size=16, color=group["color"], opacity=0.95),
+                name=status_text,
+                hovertemplate="%{hovertext}<extra></extra>",
+                textfont=dict(size=12, color='#0f172a'),
+                hovertext=texts,
+            ))
 
-    center_lat = float(sorted_devices[0].get('lat', 36.73291))
-    center_lng = float(sorted_devices[0].get('lng', 101.74776))
-    fig.update_layout(
-        map_style="open-street-map",
-        map=dict(center=dict(lat=center_lat, lon=center_lng), zoom=12),
-        margin={"r": 0, "t": 0, "l": 0, "b": 0},
-        height=460,
-        legend=dict(
-            yanchor="top",
-            y=0.98,
-            xanchor="left",
-            x=0.02,
-            bgcolor="rgba(255, 255, 255, 0.92)",
-            bordercolor="#CBD5E1",
-            borderwidth=1,
-        ),
-    )
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        key="greenhouse_status_map",
-    )
+        center_lat = float(sorted_devices[0].get('lat', 36.73291))
+        center_lng = float(sorted_devices[0].get('lng', 101.74776))
+        fig.update_layout(
+            map_style="open-street-map",
+            map=dict(center=dict(lat=center_lat, lon=center_lng), zoom=12),
+            margin={"r": 0, "t": 0, "l": 0, "b": 0},
+            height=460,
+            legend=dict(
+                yanchor="top",
+                y=0.98,
+                xanchor="left",
+                x=0.02,
+                bgcolor="rgba(255, 255, 255, 0.92)",
+                bordercolor="#CBD5E1",
+                borderwidth=1,
+            ),
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key="greenhouse_status_map",
+        )
 
     st.markdown("#### 进入设备沙盘")
     card_cols = st.columns(3, gap='large')

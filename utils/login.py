@@ -166,10 +166,7 @@ def check_password(bg_path,json_path="./users.json"):
 
         users_db[user] = new_p
         save_users(users_db,json_path)
-        
-        # 解除强制锁定，进入系统
-        st.session_state["force_change_pwd"] = False
-
+        st.session_state["force_change_pwd"] = True
         
     def show_login_form(bg_path):
         inject_css(bg_path)  
@@ -235,7 +232,7 @@ def check_password(bg_path,json_path="./users.json"):
             st.text_input("确认新密码", type="password", key="f_conf_pass")
             
             st.markdown("<br>", unsafe_allow_html=True)
-            st.button("确认修改并进入系统", on_click=force_update_password, use_container_width=True, type="primary")
+            st.button("确认修改并进入系统", on_click=force_update_password, width='stretch', type="primary")
 
     # === main pipeline ===
     if "password_correct" not in st.session_state:

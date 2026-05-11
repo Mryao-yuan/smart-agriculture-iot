@@ -253,10 +253,23 @@ if menu == "🌐 设备整体状态":
                 df_curve = pd.concat(final_df_list).dropna(subset=["数值"])
                 df_curve = df_curve.sort_values("采集时间")
             else:
-                df_curve = df_plot.copy().sort_values("采集时间")
-                x_col = "采集时间"
-                is_category = False
-                axis_format = "%H:%M"
+                if time_range == "今日":
+                    final_df_list = []
+                    for gh in df_plot["温室名称"].unique():
+                        gh_df = df_plot[df_plot["温室名称"] == gh].set_index("采集时间")
+                        hourly_df = gh_df["数值"].resample("1h").mean().reset_index()
+                        hourly_df["温室名称"] = gh
+                        final_df_list.append(hourly_df)
+                    df_curve = pd.concat(final_df_list).dropna(subset=["数值"])
+                    df_curve = df_curve.sort_values("采集时间")
+                    x_col = "采集时间"
+                    is_category = False
+                    axis_format = "%H:%M"
+                else:
+                    df_curve = df_plot.copy().sort_values("采集时间")
+                    x_col = "采集时间"
+                    is_category = False
+                    axis_format = "%H:%M"
 
             if not df_curve.empty:
                 sorted_gh_names = sorted(df_curve["温室名称"].unique(), key=extract_gh_num)
