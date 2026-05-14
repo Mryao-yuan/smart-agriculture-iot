@@ -30,15 +30,15 @@ def run_single_sync():
     login_res = client.login(USERNAME, PASSWORD, API_KEY)
     print("🔐 正在登录...")
     if login_res.get("flag") != "00":
-        print("❌ 登录失败:")
+        print(f"❌ 登录失败: flag={login_res.get('flag')} msg={login_res.get('msg') or login_res.get('message') or login_res}")
         return
     token_res = client.get_access_token(USERNAME, PASSWORD)
     if token_res.get("flag") != "00":
-        print("❌ 获取访问令牌失败:")
+        print(f"❌ 获取访问令牌失败: flag={token_res.get('flag')} msg={token_res.get('msg') or token_res.get('message') or token_res}")
         return
     response = client.get_devices_sensor_datas()
     if response.get("flag") != "00" or not response.get("dataList"):
-        print("未获取到有效数据或数据为空")
+        print(f"未获取到有效数据或数据为空: flag={response.get('flag')} msg={response.get('msg') or response.get('message')}")
         return
     data = response.get("dataList", [])
     if data:

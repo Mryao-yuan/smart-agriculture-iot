@@ -16,7 +16,12 @@ def _get_secret(section, key, default=""):
 
 
 def _get_config(env_name, section, key, default=""):
-    return os.getenv(env_name) or _get_secret(section, key, default)
+    value = os.getenv(env_name) or _get_secret(section, key, default)
+    if isinstance(value, str):
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1].strip()
+    return value
 
 
 
