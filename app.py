@@ -381,7 +381,7 @@ elif menu == "📈 多维数据分析":
     analysis_range = st.sidebar.selectbox(
         "选择分析的历史周期", 
         ["最近24小时", "最近一周", "最近一月"], 
-        index=1
+        index=0
     )
 
     now = get_local_now()
