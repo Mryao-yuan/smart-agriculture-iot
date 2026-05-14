@@ -17,3 +17,5 @@ env/
 *.json
 database_manager.py
 a.txt
+*.md
+*.pdf

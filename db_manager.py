@@ -2,20 +2,39 @@ import pymysql
 import streamlit as st
 import time
 import json
+import os
 from datetime import datetime
 
-# connect with TiDB Cloud using pymysql
-# 从 secrets 读取配置
-TIDB_CONFIG = st.secrets["tidb"]
+def get_tidb_config():
+    """读取 TiDB 配置，优先使用环境变量，兼容 Streamlit secrets。"""
+    secrets_config = {}
+    try:
+        secrets_config = dict(st.secrets.get("tidb", {}))
+    except Exception:
+        secrets_config = {}
+
+    return {
+        "host": os.getenv("TIDB_HOST") or secrets_config.get("host"),
+        "port": os.getenv("TIDB_PORT") or secrets_config.get("port", 4000),
+        "user": os.getenv("TIDB_USER") or secrets_config.get("user"),
+        "password": os.getenv("TIDB_PASSWORD") or secrets_config.get("password"),
+        "database": os.getenv("TIDB_DATABASE") or secrets_config.get("database"),
+    }
 
 def get_connection():
     """获取 TiDB Cloud 连接"""
+    tidb_config = get_tidb_config()
+    required_keys = ["host", "port", "user", "password", "database"]
+    missing_keys = [key for key in required_keys if not tidb_config.get(key)]
+    if missing_keys:
+        raise RuntimeError(f"缺少 TiDB 配置项: {', '.join(missing_keys)}")
+
     return pymysql.connect(
-        host=TIDB_CONFIG["host"],
-        port=TIDB_CONFIG["port"],
-        user=TIDB_CONFIG["user"],
-        password=TIDB_CONFIG["password"],
-        database=TIDB_CONFIG["database"],
+        host=tidb_config["host"],
+        port=int(tidb_config["port"]),
+        user=tidb_config["user"],
+        password=tidb_config["password"],
+        database=tidb_config["database"],
         ssl_verify_cert=True, # TiDB Cloud 必须开启 SSL
         ssl_verify_identity=True,
         charset='utf8mb4',
@@ -24,6 +43,7 @@ def get_connection():
 
 def init_db():
     """初始化 TiDB 云端数据库并自动建表（适配嵌套同步逻辑）"""
+    tidb_config = get_tidb_config()
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -126,6 +146,7 @@ def init_db():
                     UNIQUE KEY uk_sensor_time (sensor_id, add_time)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             ''')  
+
             # 6. 种植批次表 (用于生长曲线和积温分析)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS batches (
@@ -155,7 +176,7 @@ def init_db():
                 SELECT COLUMN_NAME
                 FROM information_schema.COLUMNS
                 WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'work_orders'
-            """, (TIDB_CONFIG["database"],))
+            """, (tidb_config["database"],))
             work_order_columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
 
             if "batch_id" not in work_order_columns:
@@ -169,7 +190,7 @@ def init_db():
                 WHERE TABLE_SCHEMA = %s
                   AND TABLE_NAME = 'work_orders'
                   AND INDEX_NAME = 'idx_work_orders_batch_id'
-            """, (TIDB_CONFIG["database"],))
+            """, (tidb_config["database"],))
             if not cursor.fetchone():
                 try:
                     cursor.execute("CREATE INDEX idx_work_orders_batch_id ON work_orders(batch_id)")
@@ -292,7 +313,7 @@ def get_sensor_history_by_time(sensor_id, start_str, end_str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT add_time, val FROM sensor_history WHERE sensor_id = %s AND add_time BETWEEN %s AND %s ORDER BY add_time ASC"
+            sql = "SELECT add_time, value FROM sensor_history WHERE sensor_id = %s AND add_time BETWEEN %s AND %s ORDER BY add_time ASC"
             cursor.execute(sql, (sensor_id, start_str, end_str))
             return cursor.fetchall() # DictCursor 会直接返回字典列表
     finally:

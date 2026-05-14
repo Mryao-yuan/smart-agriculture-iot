@@ -1,14 +1,37 @@
+import os
+
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+
+def _get_secret(section, key, default=""):
+    if st is None:
+        return default
+    try:
+        return st.secrets.get(section, {}).get(key, default)
+    except Exception:
+        return default
+
+
+def _get_config(env_name, section, key, default=""):
+    return os.getenv(env_name) or _get_secret(section, key, default)
+
+
+
 DB_NAME = "Smart_Agriculture.db"
 
 SYNC_INTERVAL = 300  # 秒
-
-USERNAME = "yys-zhw"
-PASSWORD = "123456"
-API_KEY = "ffec4dee9fa344208f9c3b6c870b4879"
-
-WEATHER_API_KEY = "d8bd7e4c3d59315deb2cbb5931296891"
-
 DEBUG_MODE = True
+
+USERNAME = _get_config("IOT_USERNAME", "iot", "username")
+PASSWORD = _get_config("IOT_PASSWORD", "iot", "password")
+API_KEY = _get_config("IOT_API_KEY", "iot", "api_key")
+
+WEATHER_API_KEY = _get_config("WEATHER_API_KEY", "weather", "api_key")
+DINGTALK_OFFICIAL_WEBHOOK = _get_config("DINGTALK_OFFICIAL_WEBHOOK", "dingtalk", "official_webhook")
+
 
 METRIC_BEHAVIOR = {
     "空温": {"unit": "℃", "min": -10, "max": 60, "step": 0.5, "def_min": 10.0, "def_max": 35.0},

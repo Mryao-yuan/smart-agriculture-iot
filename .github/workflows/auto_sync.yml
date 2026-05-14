@@ -5,9 +5,17 @@ on:
     # - cron: '*/10 * * * *' # 每 10 分钟执行一次
   workflow_dispatch: # 允许网页端手动触发
 
+permissions:
+  contents: read
+
+concurrency:
+  group: iot-data-sync
+  cancel-in-progress: false
+
 jobs:
   sync_data:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: 检出代码
         uses: actions/checkout@v3
@@ -20,19 +28,18 @@ jobs:
       - name: 安装项目依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pymysql cryptography requests streamlit
-
-      - name: 生成安全连接配置
-        run: |
-          mkdir -p .streamlit
-          cat <<EOF > .streamlit/secrets.toml
-          [tidb]
-          host = "${{ secrets.TIDB_HOST }}"
-          port = 4000
-          user = "${{ secrets.TIDB_USER }}"
-          password = "${{ secrets.TIDB_PASSWORD }}"
-          database = "iot_data"
-          EOF
+          pip install -r requirements.txt
 
       - name: 运行同步脚本
+        env:
+          TIDB_HOST: ${{ secrets.TIDB_HOST }}
+          TIDB_PORT: "4000"
+          TIDB_USER: ${{ secrets.TIDB_USER }}
+          TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+          TIDB_DATABASE: iot_data
+          IOT_USERNAME: ${{ secrets.IOT_USERNAME }}
+          IOT_PASSWORD: ${{ secrets.IOT_PASSWORD }}
+          IOT_API_KEY: ${{ secrets.IOT_API_KEY }}
+          WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
+          DINGTALK_OFFICIAL_WEBHOOK: ${{ secrets.DINGTALK_OFFICIAL_WEBHOOK }}
         run: python sync_online.py

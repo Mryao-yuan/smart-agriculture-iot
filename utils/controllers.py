@@ -1,8 +1,6 @@
 import streamlit as st
-from datetime import datetime
+from config import DEBUG_MODE
 from utils.timezone import get_local_now
-
-DEBUG_MODE = True
 
 def resolve_binding_form_type(sensor_name):
     sensor_name = (sensor_name or "").strip()

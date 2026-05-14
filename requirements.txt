@@ -5,4 +5,5 @@ pymysql==1.1.3
 Requests==2.33.1
 streamlit==1.52.2
 captcha
+cryptography
 statsmodels>=0.14,<1.0

@@ -321,17 +321,22 @@ class IotClient:
 
 # ===================== 测试入口=====================
 if __name__ == "__main__":
+    from config import USERNAME, PASSWORD, API_KEY
+
+    if not all([USERNAME, PASSWORD, API_KEY]):
+        raise SystemExit("请先配置 IOT_USERNAME、IOT_PASSWORD 和 IOT_API_KEY 后再运行测试入口。")
+
     client = IotClient()
 
     login_res = client.login(
-        userName="yys-zhw",
-        password="123456",
-        apiKey="ffec4dee9fa344208f9c3b6c870b4879"
+        userName=USERNAME,
+        password=PASSWORD,
+        apiKey=API_KEY
     )
     print("登录结果：", login_res)
 
     if login_res.get("flag") == "00":
-        token_res = client.get_access_token("yys-zhw", "123456")
+        token_res = client.get_access_token(USERNAME, PASSWORD)
         print("\n获取Token结果：", token_res)
 
         if token_res.get("flag") == "00":

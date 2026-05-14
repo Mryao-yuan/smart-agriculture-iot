@@ -29,12 +29,12 @@ from datetime import datetime
 bg_path = "imgs/bg1.png"
 json_path="./users.json"
 
+# ==================== 1. 基础配置与全局工具 ====================
+st.set_page_config(page_title="智慧温室 IoT 平台", layout="wide", page_icon="🌿")
+
 # === login ===
 if not check_password(bg_path,json_path):
     st.stop()
-
-# ==================== 1. 基础配置与全局工具 ====================
-st.set_page_config(page_title="智慧温室 IoT 平台", layout="wide", page_icon="🌿")
 
 # ==================== 2. Session 状态初始化 ====================
 if 'logged_in' not in st.session_state:
@@ -67,7 +67,7 @@ with st.sidebar:
             data = device_info_get()
             st.session_state.device_data = (data or {}).get("dataList", []) or []
             st.session_state.device_data_loaded = True
-    if st.button("🔄 刷新设备数据", use_container_width=True):
+    if st.button("🔄 刷新设备数据", width='stretch'):
         with st.spinner("正在刷新设备数据..."):
             device_info_get.clear()
             data = device_info_get()
@@ -320,7 +320,7 @@ elif menu == "🎮 单棚设备沙盘":
             )
             st.session_state["selected_greenhouse"] = selected_gh
         with top_cols[1]:
-            if st.button("⬅️ 返回地图总览", use_container_width=True, key="back_to_dashboard"):
+            if st.button("⬅️ 返回地图总览", width='stretch', key="back_to_dashboard"):
                 st.session_state["menu_target"] = "🌐 设备整体状态"
                 st.rerun()
 
@@ -414,10 +414,10 @@ elif menu == "📈 多维数据分析":
             dynamic_metric_opts = sorted(list(set(dynamic_metric_opts)))
             print(f"🔍 可用于分析的传感器选项: {dynamic_metric_opts}")
         # 2. 渲染下拉框
-        if dynamic_metric_opts:
-            default_y_index = 1 if len(dynamic_metric_opts) > 1 else 0
+        if len(dynamic_metric_opts) >= 2:
             x_metric = c1.selectbox("横坐标 - 例如光照", dynamic_metric_opts, index=0)
-            y_metric = c2.selectbox("纵坐标 - 例如温度", [metric for metric in dynamic_metric_opts if metric != x_metric], index=default_y_index)
+            y_metric_options = [metric for metric in dynamic_metric_opts if metric != x_metric]
+            y_metric = c2.selectbox("纵坐标 - 例如温度", y_metric_options, index=0)
             with st.spinner(f"正在拉取【{selected_gh}】自 {start_time.strftime('%Y-%m-%d %H:%M')} 以来的历史数据..."):
                 db_manager.init_db() 
                 conn = db_manager.get_connection()
@@ -511,7 +511,7 @@ elif menu == "📈 多维数据分析":
                     else:
                         st.info(f"获取的历史数据中未包含【{x_metric}】或【{y_metric}】的有效交叉数据。")
         else:
-            c1.warning(f"⚠️ 【{selected_gh}】下暂无连续型环境传感器数据") 
+            c1.warning(f"⚠️ 【{selected_gh}】下至少需要 2 个连续型环境传感器才能做相关性分析") 
     with tab2:
         # ---------------- 【需求3】前中后区域聚合分析 (全周期 + 多棚对比) ----------------
         st.subheader("全局大棚微气候区域传感器数据分析 (前/中/后)")
@@ -1184,7 +1184,7 @@ elif menu == "📋 批次工单与联控":
                             key=f"harvest_edit_{batch_id}"
                         )
                         btn_c1, btn_c2 = st.columns(2)
-                        if btn_c1.button("💾 保存批次信息", key=f"save_batch_{batch_id}", use_container_width=True):
+                        if btn_c1.button("💾 保存批次信息", key=f"save_batch_{batch_id}", width='stretch'):
                             if start_dt and next_harvest < start_dt.date():
                                 st.warning("预计采收日期不能早于定植/播种日期。")
                             else:
@@ -1202,7 +1202,7 @@ elif menu == "📋 批次工单与联控":
                                 finally:
                                     conn.close()
 
-                        if batch["status"] == 1 and btn_c2.button("🏁 标记为已结束", key=f"finish_batch_{batch_id}", use_container_width=True):
+                        if batch["status"] == 1 and btn_c2.button("🏁 标记为已结束", key=f"finish_batch_{batch_id}", width='stretch'):
                             conn = db_manager.get_connection()
                             try:
                                 with conn.cursor() as cursor:
@@ -1218,7 +1218,7 @@ elif menu == "📋 批次工单与联控":
                             value=True,
                             key=f"delete_orders_with_batch_{batch_id}"
                         )
-                        if st.button("🗑️ 删除该批次", key=f"delete_batch_{batch_id}", use_container_width=True):
+                        if st.button("🗑️ 删除该批次", key=f"delete_batch_{batch_id}", width='stretch'):
                             try:
                                 delete_batch_with_orders(batch_id, delete_orders=delete_orders_flag)
                                 st.success(f"批次 {batch_id} 已删除。")
@@ -1238,7 +1238,7 @@ elif menu == "📋 批次工单与联控":
                                 }
                                 for order in latest_orders
                             ])
-                            st.dataframe(latest_df, use_container_width=True, hide_index=True)
+                            st.dataframe(latest_df, width='stretch', hide_index=True)
                         else:
                             st.info("该批次暂未归档工单。")
 
@@ -1302,7 +1302,7 @@ elif menu == "📋 批次工单与联控":
                         get_local_now()
                     )
                     fig_batch.update_layout(height=420, margin={"t": 50, "b": 0}, hovermode="x unified")
-                    st.plotly_chart(fig_batch, use_container_width=True)
+                    st.plotly_chart(fig_batch, width='stretch')
 
     with create_tab:
         st.subheader("➕ 开启新的种植批次")
@@ -1317,7 +1317,7 @@ elif menu == "📋 批次工单与联控":
                 b_stage = c2.selectbox("初始生长阶段", stage_options[:-1], key="create_batch_stage")
                 b_start = c1.date_input("定植/播种日期", value=get_local_now().date())
                 b_harvest = c2.date_input("预计采收日期", value=(get_local_now() + timedelta(days=45)).date())
-                submit_batch = st.form_submit_button("🚀 确认开启批次", type="primary", use_container_width=True)
+                submit_batch = st.form_submit_button("🚀 确认开启批次", type="primary", width='stretch')
 
                 if submit_batch:
                     crop_name = b_crop.strip()
@@ -1363,7 +1363,7 @@ elif menu == "📋 批次工单与联控":
                 duration = f3.number_input("耗时(分钟)", min_value=1, value=30)
                 operator = st.text_input("操作负责人", placeholder="输入执行人姓名")
                 details = st.text_area("作业明细内容", placeholder="例如：设定 EC 值 1.5，开启侧窗通风 30%...")
-                submitted = st.form_submit_button("💾 生成并归档工单", type="primary", use_container_width=True)
+                submitted = st.form_submit_button("💾 生成并归档工单", type="primary", width='stretch')
 
                 if submitted:
                     if not active_batch_labels:
@@ -1426,14 +1426,14 @@ elif menu == "📋 批次工单与联控":
             stat_c2.metric("累计工时", f"{total_duration} 分钟")
 
             clean_c1, clean_c2 = st.columns(2)
-            if clean_c1.button("🧹 清空全部工单", use_container_width=True, key="delete_all_orders"):
+            if clean_c1.button("🧹 清空全部工单", width='stretch', key="delete_all_orders"):
                 try:
                     bulk_delete_test_data(delete_all_orders=True)
                     st.success("全部工单已清空。")
                     st.rerun()
                 except Exception as e:
                     st.error(f"清空工单失败: {e}")
-            if clean_c2.button("🧹 删除全部已结束批次", use_container_width=True, key="delete_finished_batches"):
+            if clean_c2.button("🧹 删除全部已结束批次", width='stretch', key="delete_finished_batches"):
                 try:
                     bulk_delete_test_data(delete_finished_batches=True)
                     st.success("全部已结束批次及其关联工单已删除。")
@@ -1459,7 +1459,7 @@ elif menu == "📋 批次工单与联控":
                     }
                     for order in filtered_orders
                 ])
-                st.dataframe(orders_df, use_container_width=True, hide_index=True)
+                st.dataframe(orders_df, width='stretch', hide_index=True)
                 order_delete_options = {
                     f"工单ID:{order['id']} | {format_date(get_work_order_time_window(order)[0], with_time=True)} | "
                     f"{order.get('gh_name', '未知温室')} | {order.get('task_type', '未知类型')}": order["id"]
@@ -1471,7 +1471,7 @@ elif menu == "📋 批次工单与联控":
                     list(order_delete_options.keys()),
                     key="delete_work_order_select"
                 )
-                if delete_order_col2.button("🗑️ 删除工单", use_container_width=True, key="delete_work_order_btn"):
+                if delete_order_col2.button("🗑️ 删除工单", width='stretch', key="delete_work_order_btn"):
                     try:
                         delete_work_order(order_delete_options[selected_delete_order_label])
                         st.success("工单已删除。")
@@ -1532,7 +1532,7 @@ elif menu == "📋 批次工单与联控":
                 control_operator = st.text_input("执行负责人", value="系统联控" if archive_control else "", key="control_operator")
                 control_note = st.text_area("执行说明", placeholder="例如：中午棚内升温较快，统一打开顶部通风。", key="control_note")
 
-                if st.button("🚀 下发联控指令", type="primary", use_container_width=True):
+                if st.button("🚀 下发联控指令", type="primary", width='stretch'):
                     if not target_ghs:
                         st.warning("请至少选择一个温室。")
                     elif "⚠️" in action:
@@ -1603,7 +1603,7 @@ elif menu == "📋 批次工单与联控":
 
                     details = result.get("details") or []
                     if details:
-                        st.dataframe(pd.DataFrame(details), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(details), width='stretch', hide_index=True)
 
 # ----------------- 页面五：策略与预警 -----------------
 elif menu == "⚙️ 策略与预警":
@@ -1617,7 +1617,7 @@ elif menu == "⚙️ 策略与预警":
     )
     final_webhook = ""
     # 你的硬编码 Webhook (官方群)
-    OFFICIAL_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=887648e45f915aca4617e5958a69171d6f3389cc320fe8253cc36460121ae925"
+    OFFICIAL_WEBHOOK = DINGTALK_OFFICIAL_WEBHOOK
     if push_mode == "加入官方公共运维群 (推荐)":
         _, col_mid, _ = st.columns([1, 4, 1])
         with col_mid:
@@ -1631,7 +1631,10 @@ elif menu == "⚙️ 策略与预警":
                 2. 系统已内置机器人，无需任何配置。
                 3. 请在下方保存规则，即可开始接收推送。
                 """)
-        final_webhook = OFFICIAL_WEBHOOK
+        if OFFICIAL_WEBHOOK:
+            final_webhook = OFFICIAL_WEBHOOK
+        else:
+            st.warning("⚠️ 官方群机器人 Webhook 尚未配置，请在 secrets 中设置 DINGTALK_OFFICIAL_WEBHOOK。")
     else:
         _, col_mid, _ = st.columns([1, 4, 1])
         with col_mid:
@@ -1649,6 +1652,7 @@ elif menu == "⚙️ 策略与预警":
                 )
                 if user_webhook:
                     user_webhook_check(user_webhook)
+                    final_webhook = user_webhook.strip()
                 else:
                     st.warning("⚠️ 请输入 Webhook 地址以继续配置。")
                     final_webhook = ""
@@ -1753,6 +1757,9 @@ elif menu == "⚙️ 策略与预警":
         submit = st.form_submit_button("🚀 部署预警策略", type="primary")
         # ================= 4. 提交保存逻辑 =================
         if submit:
+            if not final_webhook:
+                st.error("⚠️ 请先配置有效的钉钉 Webhook，再部署预警策略。")
+                st.stop()
             with st.spinner("正在写入云端规则..."):
                 try:
                     db_manager.init_db() 
@@ -1795,7 +1802,7 @@ elif menu == "⚙️ 策略与预警":
                     conn.close()
                     st.balloons()
 
-                    if target_gh == "全局所有大棚":
+                    if target_gh == "所有大棚":
                         st.success(f"✅ 已成功为 **{len(actual_targets)}** 个大棚批量部署【{target_metric}】的报警策略！")
                     else:
                         st.success(f"✅ 【{target_gh}】的【{target_metric}】报警策略部署成功！")

@@ -13,6 +13,19 @@ ALERT_COOLDOWN_HOURS = 5
 
 def run_single_sync():
     print("🚀 [云端调度] 开始执行单次 IoT 数据同步...")
+    missing_iot_config = [
+        name
+        for name, value in {
+            "IOT_USERNAME": USERNAME,
+            "IOT_PASSWORD": PASSWORD,
+            "IOT_API_KEY": API_KEY,
+        }.items()
+        if not value
+    ]
+    if missing_iot_config:
+        print(f"❌ 缺少物联网接口配置: {', '.join(missing_iot_config)}")
+        return
+
     client = IotClient()
     login_res = client.login(USERNAME, PASSWORD, API_KEY)
     print("🔐 正在登录...")
@@ -67,9 +80,8 @@ def send_dingtalk_msg(webhook, data, reason):
     try:
         requests.post(webhook, data=json.dumps(payload), headers=headers, timeout=5)
         print(f"🔔 已向钉钉推送报警：{data['device_name']}-{data['sensor_name']}")
-    except:
-        print(f"⚠️ 钉钉推送失败: {data['device_name']}-{data['sensor_name']}")
-        pass
+    except Exception as e:
+        print(f"⚠️ 钉钉推送失败: {data['device_name']}-{data['sensor_name']} | {e}")
 
 def send_recovery_msg(webhook, data, message):
     """执行钉钉 Markdown 恢复通知"""
@@ -94,9 +106,8 @@ def send_recovery_msg(webhook, data, message):
     try:
         requests.post(webhook, data=json.dumps(payload), headers=headers, timeout=5)
         print(f"✅ 已发送恢复通知：{data['device_name']}-{data['sensor_name']}")
-    except:
-        print(f"⚠️ 恢复通知发送失败: {data['device_name']}-{data['sensor_name']}")
-        pass
+    except Exception as e:
+        print(f"⚠️ 恢复通知发送失败: {data['device_name']}-{data['sensor_name']} | {e}")
 
 def normalize_metric_name(sensor_name, sensor_type):
     if sensor_type == 1:
